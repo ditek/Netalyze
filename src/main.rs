@@ -1,15 +1,17 @@
 use clap::Parser;
 use regex::Regex;
-#[allow(unused_imports)]
-use std::process::{Command, Stdio};
+use std::net::{AddrParseError, Ipv4Addr};
+use std::process::Command;
 
 /// Run network latency and throughput tests
 #[derive(Parser)]
 struct Cli {
-    /// Server IP
-    ip: String,
-    // #[arg(short='p', long="path")]
-    // path: std::path::PathBuf,
+    /// IP address to ping
+    #[arg(long, value_parser=validate_ip)]
+    ping_ip: Option<Ipv4Addr>,
+    /// IP address for iperf3 server
+    #[arg(long, value_parser=validate_ip)]
+    iperf_ip: Option<Ipv4Addr>,
 }
 
 #[derive(Debug)]
@@ -20,7 +22,12 @@ struct Latency {
     max: f64,
 }
 
-fn run_ping(ip: &str) -> Result<Latency, &str> {
+fn validate_ip(ip: &str) -> Result<Ipv4Addr, AddrParseError> {
+    ip.parse::<Ipv4Addr>()
+}
+
+#[allow(dead_code)]
+fn run_ping(ip: Ipv4Addr) -> Result<Latency, String> {
     println!("Running ping test on {}", ip);
     let interval_ms = 10.0;
     let pkt_count = 128;
@@ -31,20 +38,9 @@ fn run_ping(ip: &str) -> Result<Latency, &str> {
         .arg("-c")
         .arg(pkt_count.to_string())
         .arg("-q")
-        .arg(ip)
+        .arg(ip.to_string())
         .output()
         .expect("Failed to execute command");
-
-    // let child = Command::new("ping")
-    //     .arg("-i").arg((interval_ms/1000.0).to_string())
-    //     .arg("-c").arg(pkt_count.to_string())
-    //     .arg("-q")
-    //     .arg(ip)
-    //     .stdout(Stdio::piped())
-    //     .spawn()
-    //     .expect("Failed to execute command");
-    // let output = child.wait_with_output().expect("Failed to wait on child");
-
     let output_str = String::from_utf8_lossy(&output.stdout);
 
     // Use a regular expression to parse the rtt line
@@ -59,19 +55,32 @@ fn run_ping(ip: &str) -> Result<Latency, &str> {
         return Ok(latency);
     } else {
         eprintln!("Failed to parse ping output:\n{}", output_str);
-        return Err("Failed to parse ping output");
+        return Err("Failed to parse ping output".to_string());
     }
+}
+
+#[allow(dead_code)]
+fn run_iperf3(ip: Ipv4Addr) -> Result<(), String> {
+    println!("Running iperf3 test on {}", ip);
+    let output = Command::new("iperf3")
+        .arg("-c")
+        .arg(ip.to_string())
+        .arg("-t").arg("1")
+        .output()
+        .expect("Failed to execute command");
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    println!("{}", output_str);
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
-    // Check if the IP is valid
-    let re = Regex::new(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$").unwrap();
-    if !re.is_match(&args.ip) {
-        println!("Invalid IP address");
-        return Ok(());
+    if let Some(ip) = args.ping_ip {
+        run_ping(ip)?;
     }
-
-    run_ping(&args.ip)?;
+    if let Some(ip) = args.iperf_ip {
+        run_iperf3(ip)?;
+    }
     Ok(())
 }
