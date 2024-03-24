@@ -2,6 +2,7 @@ use clap::Parser;
 use regex::Regex;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::process::Command;
+use serde_json::Value;
 
 /// Run network latency and throughput tests
 #[derive(Parser)]
@@ -20,6 +21,15 @@ struct Latency {
     min: f64,
     avg: f64,
     max: f64,
+}
+
+#[derive(Debug)]
+struct IperfResult {
+    remote_host: String,
+    timestamp: String,
+    bitrate_sent_mb: f64,
+    bitrate_received_mb: f64,
+    duration: i64,
 }
 
 fn validate_ip(ip: &str) -> Result<Ipv4Addr, AddrParseError> {
@@ -60,18 +70,32 @@ fn run_ping(ip: Ipv4Addr) -> Result<Latency, String> {
 }
 
 #[allow(dead_code)]
-fn run_iperf3(ip: Ipv4Addr) -> Result<(), String> {
+fn run_iperf3(ip: Ipv4Addr) -> Result<IperfResult, String> {
     println!("Running iperf3 test on {}", ip);
     let output = Command::new("iperf3")
         .arg("-c")
         .arg(ip.to_string())
-        .arg("-t").arg("1")
+        .arg("-t")
+        .arg("1")
+        .arg("-J")
         .output()
         .expect("Failed to execute command");
 
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    println!("{}", output_str);
-    Ok(())
+    let output_json = String::from_utf8_lossy(&output.stdout);
+    let json: Value = serde_json::from_str(&output_json).expect("Failed to parse iperf3 output");
+
+    let result = IperfResult {
+        remote_host: json["start"]["connecting_to"]["host"].to_string(),
+        timestamp: json["start"]["timestamp"]["time"].to_string(),
+        duration: json["start"]["test_start"]["duration"].as_i64().unwrap(),
+        bitrate_sent_mb: json["end"]["sum_sent"]["bits_per_second"].as_f64().unwrap() * 1e-6,
+        bitrate_received_mb: json["end"]["sum_received"]["bits_per_second"]
+            .as_f64()
+            .unwrap()
+            * 1e-6,
+    };
+    println!("{:?}", result);
+    Ok(result)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
