@@ -5,7 +5,9 @@ use serde_json::Value;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::process::Command;
 use std::{io, io::Write};
+use std::io::BufRead;
 use chrono::Local;
+use std::time::Duration;
 
 /// Run network latency and throughput tests
 #[derive(Parser)]
@@ -16,6 +18,9 @@ struct Cli {
     /// IP address for iperf3 server
     #[arg(long, value_parser=validate_ip)]
     iperf_ip: Option<Ipv4Addr>,
+    /// Serial port for AT commands
+    #[arg(long="serial")]
+    serial_port: Option<String>,
     /// Save results to a file. If not specified, print to stdout
     #[arg(short, long="save")]
     save_to_file: bool,
@@ -39,11 +44,70 @@ struct IperfResult {
 }
 
 #[derive(Debug, Serialize)]
+struct CPSI {
+    mode: String,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    lte: Option<Lte>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    nr5g_nsa: Option<Nr5gNsa>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    nr5g_sa: Option<Nr5gSa>,
+}
+
+#[derive(Debug, Serialize)]
+struct Lte {
+    operation_mode: String,
+    mcc_mnc: String,
+    tac: String,
+    scell_id: String,
+    pcell_id: String,
+    freq_band: String,
+    earfcn: String,
+    dlbw: String,
+    ulbw: String,
+    rsrq: String,
+    rsrp: String,
+    rssi: String,
+    rssnr: String,
+}
+
+#[derive(Debug, Serialize)]
+struct Nr5gNsa {
+    pcell_id: String,
+    freq_band: String,
+    earfcn_ssb: String,
+    rsrp: String,
+    rsrq: String,
+    snr: String,
+}
+
+#[derive(Debug, Serialize)]
+struct Nr5gSa {
+    operation_mode: String,
+    mcc_mnc: String,
+    tac: String,
+    scell_id: String,
+    pcell_id: String,
+    freq_band: String,
+    earfcn: String,
+    rsrp: String,
+    rsrq: String,
+    snr: String,
+}
+
+
+#[derive(Debug, Serialize)]
 struct TestResult {
     id: u32,
     timestamp: String,
+    // #[serde(flatten)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     latency: Option<Latency>,
+    // #[serde(flatten)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     iperf: Option<IperfResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signal: Option<CPSI>,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,12 +184,124 @@ fn run_iperf3(ip: Ipv4Addr) -> Result<IperfResult, String> {
     Ok(result)
 }
 
+fn run_cpsi(serial_port: &str) -> Result<CPSI, String> {
+    let mut port = match serialport::new(serial_port, 115200)
+    .timeout(Duration::from_millis(10))
+    .open() {
+        Ok(port) => port,
+        Err(e) => return Err(format!("Failed to open serial port: {}", e)),
+    };
+    port.write_all(b"AT+CPSI?\r\n").expect("Failed to write to serial port");
+    let mut reader = std::io::BufReader::new(port);
+    let mut response = String::new();
+    // The first line is an echo of the command
+    reader.read_line(&mut response).expect("Failed to read from serial port");
+    reader.read_line(&mut response).expect("Failed to read from serial port");
+    println!("{}", response);
+    match parse_cpsi(response.clone()) {
+        Ok(cpsi) => Ok(cpsi),
+        Err(e) => Err(format!("{e}\nResponse: {response}")),
+    }
+}
+
+#[allow(dead_code)]
+fn parse_cpsi(input: String) -> Result<CPSI, String> {
+    let mode_pattern = Regex::new(r"\+CPSI: (\w+),.+").unwrap();
+    let lte_pattern = Regex::new(
+        r"\+CPSI: LTE,(\w+),([\d-]+),0x([\dA-Fa-f]+),(\d+),(\d+),([\w-]+),(\d+),(\d+),(\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
+    let nr5g_nsa_pattern = Regex::new(r"\+CPSI: NR5G_NSA,(\d+),([\w-]+),(\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
+    let nr5g_sa_pattern = Regex::new(
+        r"\+CPSI: NR5G_SA,(\w+),([\d-]+),0x([\dA-Fa-f]+),(\d+),(\d+),([\w-]+),(\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
+    // let lte_example = "+CPSI: LTE,Online,460-11,0x5A1E,187214780,257,EUTRAN-BAND3,1850,5,5,-94,-850,-545,15";
+    // let nr5g_nsa_example = "+CPSI: NR5G_NSA,644,NR5G_BAND78,627264,-960,-120,95";
+    // let nr5g_sa_example = "+CPSI: NR5G_SA,Online,242-12,0x765D,4955280,0,NR5G_BAND78,640704,-740,-110,240";
+
+    let mode: &str;
+    match mode_pattern.captures(&input) {
+        Some(caps) => {
+            mode = caps.get(1).unwrap().as_str();
+        }
+        None => return Err("Failed to parse mode".to_string()),
+    }
+    let mut lte : Option<Lte> = None;
+    let mut nr5g_nsa : Option<Nr5gNsa> = None;
+    let mut nr5g_sa : Option<Nr5gSa> = None;
+    
+    match mode {
+        "LTE" => {
+            lte = match lte_pattern.captures(&input) {
+                Some(caps) => {
+                    Some(Lte {
+                        operation_mode: caps.get(1).unwrap().as_str().to_string(),
+                        mcc_mnc: caps.get(2).unwrap().as_str().to_string(),
+                        tac: caps.get(3).unwrap().as_str().to_string(),
+                        scell_id: caps.get(4).unwrap().as_str().to_string(),
+                        pcell_id: caps.get(5).unwrap().as_str().to_string(),
+                        freq_band: caps.get(6).unwrap().as_str().to_string(),
+                        earfcn: caps.get(7).unwrap().as_str().to_string(),
+                        dlbw: caps.get(8).unwrap().as_str().to_string(),
+                        ulbw: caps.get(9).unwrap().as_str().to_string(),
+                        rsrq: (caps.get(10).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
+                        rsrp: (caps.get(11).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
+                        rssi: (caps.get(12).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
+                        rssnr: caps.get(13).unwrap().as_str().to_string(),
+                    })
+                }
+                None => return Err("Failed to parse LTE".to_string()),
+            };
+        },
+        "NR5G_NSA" => {
+            nr5g_nsa = match nr5g_nsa_pattern.captures(&input) {
+                Some(caps) => {
+                    Some(Nr5gNsa {
+                        pcell_id: caps.get(1).unwrap().as_str().to_string(),
+                        freq_band: caps.get(2).unwrap().as_str().to_string(),
+                        earfcn_ssb: caps.get(3).unwrap().as_str().to_string(),
+                        rsrp: (caps.get(4).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
+                        rsrq: (caps.get(5).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
+                        snr: caps.get(6).unwrap().as_str().to_string(),
+                    })
+                }
+                None => return Err("Failed to parse NR5G_NSA".to_string()),
+            };
+        }
+        "NR5G_SA" => {
+            nr5g_sa = match nr5g_sa_pattern.captures(&input) {
+                Some(caps) => {
+                    Some(Nr5gSa {
+                        operation_mode: caps.get(1).unwrap().as_str().to_string(),
+                        mcc_mnc: caps.get(2).unwrap().as_str().to_string(),
+                        tac: caps.get(3).unwrap().as_str().to_string(),
+                        scell_id: caps.get(4).unwrap().as_str().to_string(),
+                        pcell_id: caps.get(5).unwrap().as_str().to_string(),
+                        freq_band: caps.get(6).unwrap().as_str().to_string(),
+                        earfcn: caps.get(7).unwrap().as_str().to_string(),
+                        rsrp: (caps.get(8).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
+                        rsrq: (caps.get(9).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
+                        snr: caps.get(10).unwrap().as_str().to_string(),
+                    })
+                }
+                None => return Err("Failed to parse NR5G_SA".to_string()),
+            };
+        
+        }
+        _ => return Err("Invalid mode {mode}".to_string()),
+    }
+    return Ok(CPSI {
+        mode: mode.to_string(),
+        lte: lte,
+        nr5g_nsa: nr5g_nsa,
+        nr5g_sa: nr5g_sa,
+    });
+}
+
 fn run_test(test_id: u32, args: &Cli) -> TestResult {
     let mut result = TestResult {
         id: test_id,
         timestamp: Local::now().format("%Y-%m-%d_%H:%M:%S").to_string(),
         latency: None,
         iperf: None,
+        signal: None,
     };
     if let Some(ip) = args.ping_ip {
         match run_ping(ip) {
@@ -137,6 +313,12 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
         match run_iperf3(ip) {
             Ok(iperf) => result.iperf = Some(iperf),
             Err(e) => eprintln!("Failed to run iperf3 test: {}", e),
+        }
+    }
+    if let Some(port) = &args.serial_port {
+        match run_cpsi(port) {
+            Ok(cpsi) => result.signal = Some(cpsi),
+            Err(e) => eprintln!("Failed to run CPSI test: {}", e),
         }
     }
     result
@@ -169,5 +351,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("{}", json_results);
     }
+ 
     Ok(())
 }
