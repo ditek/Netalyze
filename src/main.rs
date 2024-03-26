@@ -4,6 +4,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::process::Command;
+use std::{io, io::Write};
+use chrono::Local;
 
 /// Run network latency and throughput tests
 #[derive(Parser)]
@@ -14,6 +16,9 @@ struct Cli {
     /// IP address for iperf3 server
     #[arg(long, value_parser=validate_ip)]
     iperf_ip: Option<Ipv4Addr>,
+    /// Save results to a file. If not specified, print to stdout
+    #[arg(short, long="save")]
+    save_to_file: bool,
 }
 
 #[derive(Debug)]
@@ -28,7 +33,6 @@ struct Latency {
 #[derive(Debug, Serialize)]
 struct IperfResult {
     server: String,
-    timestamp: String,
     uplink: f64,
     downlink: f64,
     duration: i64,
@@ -36,7 +40,8 @@ struct IperfResult {
 
 #[derive(Debug, Serialize)]
 struct TestResult {
-    id: String,
+    id: u32,
+    timestamp: String,
     latency: Option<Latency>,
     iperf: Option<IperfResult>,
 }
@@ -56,7 +61,7 @@ fn trim_float(x: f64) -> f64 {
 
 #[allow(dead_code)]
 fn run_ping(ip: Ipv4Addr) -> Result<Latency, String> {
-    println!("Running ping test on {}", ip);
+    println!("Running ping test on {}...", ip);
     let interval_ms = 10.0;
     let pkt_count = 128;
 
@@ -80,7 +85,7 @@ fn run_ping(ip: Ipv4Addr) -> Result<Latency, String> {
             max: caps[3].parse().expect("Failed to parse max rtt"),
         };
         println!("{:?}", latency);
-        println!("{output_str}");
+        // println!("{output_str}");
         return Ok(latency);
     } else {
         eprintln!("Failed to parse ping output:\n{}", output_str);
@@ -90,7 +95,7 @@ fn run_ping(ip: Ipv4Addr) -> Result<Latency, String> {
 
 #[allow(dead_code)]
 fn run_iperf3(ip: Ipv4Addr) -> Result<IperfResult, String> {
-    println!("Running iperf3 test on {}", ip);
+    println!("Running iperf3 test on {}...", ip);
     let output = Command::new("iperf3")
         .arg("-c")
         .arg(ip.to_string())
@@ -107,7 +112,6 @@ fn run_iperf3(ip: Ipv4Addr) -> Result<IperfResult, String> {
     let dl = json["end"]["sum_received"]["bits_per_second"].as_f64().unwrap();
     let result = IperfResult {
         server: json["start"]["connecting_to"]["host"].as_str().unwrap().to_string(),
-        timestamp: json["start"]["timestamp"]["time"].as_str().unwrap().to_string(),
         duration: json["start"]["test_start"]["duration"].as_i64().unwrap(),
         uplink: trim_float(ul * 1e-6),
         downlink: trim_float(dl * 1e-6),
@@ -116,10 +120,10 @@ fn run_iperf3(ip: Ipv4Addr) -> Result<IperfResult, String> {
     Ok(result)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Cli::parse();
+fn run_test(test_id: u32, args: &Cli) -> TestResult {
     let mut result = TestResult {
-        id: "test".to_string(),
+        id: test_id,
+        timestamp: Local::now().format("%Y-%m-%d_%H:%M:%S").to_string(),
         latency: None,
         iperf: None,
     };
@@ -135,8 +139,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => eprintln!("Failed to run iperf3 test: {}", e),
         }
     }
+    result
+}
 
-    let json = serde_json::to_string(&result)?;
-    println!("{}", json);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Cli::parse();
+    let mut results: Vec<TestResult> = Vec::new();
+    let mut test_id  = 0;
+    loop {
+        print!("\nPerform test {test_id}? (Press Enter to continue, 'no' to exit): ");
+        io::stdout().flush().unwrap();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        match input.trim() {
+            "" => {
+                results.push(run_test(test_id, &args));
+                test_id += 1;
+            }
+            "no" => break,
+            _ => println!("Invalid input. Try again."),
+        }
+    }
+
+    let json_results = serde_json::to_string_pretty(&results)?;
+    if args.save_to_file {
+        let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+        std::fs::write(format!("nettest-{timestamp}.json"), json_results)?;
+        println!("Results saved to results.json");
+    } else {
+        println!("{}", json_results);
+    }
     Ok(())
 }
