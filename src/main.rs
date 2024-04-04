@@ -30,14 +30,15 @@ struct Cli {
 struct TestResults {
     results: Vec<TestResult>,
 }
+
 #[derive(Debug, Serialize)]
 struct TestResult {
     #[serde(flatten)]
     info: TestInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
-    latency: Option<Latency>,
+    ping: Option<Ping>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    iperf: Option<IperfResult>,
+    iperf: Option<IPerf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     signal: Option<CPSI>,
 }
@@ -50,7 +51,8 @@ struct TestInfo{
 
 // Flatten the structs so we can serialize them to CSV
 #[derive(Serialize, Default)]
-struct TestResultRow(TestInfo, Latency, IperfResult, CpsiRow);
+struct TestResultRow(TestInfo, Ping, IPerf, CpsiRow);
+
 #[derive(Serialize, Default)]
 struct CpsiRow{
     nwk_mode: String,
@@ -59,14 +61,15 @@ struct CpsiRow{
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
-struct Latency {
-    min: f64,
-    avg: f64,
-    max: f64,
+struct Ping {
+    packet_loss: f64,
+    min_latency: f64,
+    avg_latency: f64,
+    max_latency: f64,
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
-struct IperfResult {
+struct IPerf {
     server: String,
     uplink: f64,
     downlink: f64,
@@ -161,7 +164,7 @@ fn trim_float(x: f64) -> f64 {
 }
 
 #[allow(dead_code)]
-fn run_ping(ip: Ipv4Addr) -> Result<Latency, String> {
+fn run_ping(ip: Ipv4Addr) -> Result<Ping, String> {
     println!("Running ping test on {}...", ip);
     let interval_ms = 10.0;
     let pkt_count = 128;
@@ -177,17 +180,17 @@ fn run_ping(ip: Ipv4Addr) -> Result<Latency, String> {
         .expect("Failed to execute command");
     let output_str = String::from_utf8_lossy(&output.stdout);
 
-    // Use a regular expression to parse the rtt line
-    let re = Regex::new(r"rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+) ms").unwrap();
+    let re = Regex::new(r"([\d.]+)% packet loss.+\nrtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+) ms").unwrap();
     if let Some(caps) = re.captures(&output_str) {
-        let latency = Latency {
-            min: caps[1].parse().expect("Failed to parse min rtt"),
-            avg: caps[2].parse().expect("Failed to parse avg rtt"),
-            max: caps[3].parse().expect("Failed to parse max rtt"),
+        let ping = Ping {
+            packet_loss: caps[1].parse().expect("Failed to parse packet loss"),
+            min_latency: caps[2].parse().expect("Failed to parse min rtt"),
+            avg_latency: caps[3].parse().expect("Failed to parse avg rtt"),
+            max_latency: caps[4].parse().expect("Failed to parse max rtt"),
         };
-        println!("{:?}", latency);
+        println!("{:?}", ping);
         // println!("{output_str}");
-        return Ok(latency);
+        return Ok(ping);
     } else {
         eprintln!("Failed to parse ping output:\n{}", output_str);
         return Err("Failed to parse ping output".to_string());
@@ -195,7 +198,7 @@ fn run_ping(ip: Ipv4Addr) -> Result<Latency, String> {
 }
 
 #[allow(dead_code)]
-fn run_iperf3(ip: Ipv4Addr) -> Result<IperfResult, String> {
+fn run_iperf3(ip: Ipv4Addr) -> Result<IPerf, String> {
     println!("Running iperf3 test on {}...", ip);
     let output = Command::new("iperf3")
         .arg("-c")
@@ -211,13 +214,12 @@ fn run_iperf3(ip: Ipv4Addr) -> Result<IperfResult, String> {
 
     let ul = json["end"]["sum_sent"]["bits_per_second"].as_f64().unwrap();
     let dl = json["end"]["sum_received"]["bits_per_second"].as_f64().unwrap();
-    let result = IperfResult {
+    let result = IPerf {
         server: json["start"]["connecting_to"]["host"].as_str().unwrap().to_string(),
         duration: json["start"]["test_start"]["duration"].as_i64().unwrap(),
         uplink: trim_float(ul * 1e-6),
         downlink: trim_float(dl * 1e-6),
     };
-    // println!("{:?}", result);
     Ok(result)
 }
 
@@ -339,13 +341,13 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
             id: test_id,
             timestamp: Local::now().format("%Y-%m-%d_%H:%M:%S").to_string(),
         },
-        latency: None,
+        ping: None,
         iperf: None,
         signal: None,
     };
     if let Some(ip) = args.ping_ip {
         match run_ping(ip) {
-            Ok(latency) => result.latency = Some(latency),
+            Ok(ping) => result.ping = Some(ping),
             Err(e) => eprintln!("Failed to run ping test: {}", e),
         }
     }
@@ -386,7 +388,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let json_results = serde_json::to_string_pretty(&results)?;
     let csv_rows: Vec<TestResultRow> = results.iter().map(|r| TestResultRow(
         r.info.clone(),
-        r.latency.clone().unwrap_or_default(),
+        r.ping.clone().unwrap_or_default(),
         r.iperf.clone().unwrap_or_default(),
         r.signal.clone().map(|c| c.to_cpsi_row()).unwrap_or_default())).collect();
         
