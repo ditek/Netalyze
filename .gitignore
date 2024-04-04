@@ -1,4 +1,5 @@
 nettest*.json
+nettest*.csv
 
 /target
 .idea

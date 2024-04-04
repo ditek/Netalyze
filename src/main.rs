@@ -26,16 +26,46 @@ struct Cli {
     save_to_file: bool,
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
+struct TestResults {
+    results: Vec<TestResult>,
+}
+#[derive(Debug, Serialize)]
+struct TestResult {
+    #[serde(flatten)]
+    info: TestInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latency: Option<Latency>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iperf: Option<IperfResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signal: Option<CPSI>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct TestInfo{
+    id: u32,
+    timestamp: String,
+}
+
+// Flatten the structs so we can serialize them to CSV
+#[derive(Serialize, Default)]
+struct TestResultRow(TestInfo, Latency, IperfResult, CpsiRow);
+#[derive(Serialize, Default)]
+struct CpsiRow{
+    nwk_mode: String,
+    rssi: String,
+    rsrp: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
 struct Latency {
     min: f64,
     avg: f64,
     max: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 struct IperfResult {
     server: String,
     uplink: f64,
@@ -43,7 +73,7 @@ struct IperfResult {
     duration: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct CPSI {
     mode: String,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
@@ -54,7 +84,7 @@ struct CPSI {
     nr5g_sa: Option<Nr5gSa>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct Lte {
     operation_mode: String,
     mcc_mnc: String,
@@ -71,7 +101,7 @@ struct Lte {
     rssnr: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct Nr5gNsa {
     pcell_id: String,
     freq_band: String,
@@ -81,7 +111,7 @@ struct Nr5gNsa {
     snr: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct Nr5gSa {
     operation_mode: String,
     mcc_mnc: String,
@@ -95,24 +125,31 @@ struct Nr5gSa {
     snr: String,
 }
 
-
-#[derive(Debug, Serialize)]
-struct TestResult {
-    id: u32,
-    timestamp: String,
-    // #[serde(flatten)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    latency: Option<Latency>,
-    // #[serde(flatten)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    iperf: Option<IperfResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    signal: Option<CPSI>,
-}
-
-#[derive(Debug, Serialize)]
-struct TestResults {
-    results: Vec<TestResult>,
+impl CPSI {
+    fn to_cpsi_row(&self) -> CpsiRow {
+        let mut rsrp = String::new();
+        let mut rsrq = String::new();
+        match self.mode.as_str() {
+            "LTE" => {
+                rsrp = self.lte.as_ref().unwrap().rsrp.clone();
+                rsrq = self.lte.as_ref().unwrap().rsrq.clone();
+            }
+            "NR5G_NSA" => {
+                rsrp = self.nr5g_nsa.as_ref().unwrap().rsrp.clone();
+                rsrq = self.nr5g_nsa.as_ref().unwrap().rsrq.clone();
+            }
+            "NR5G_SA" => {
+                rsrp = self.nr5g_sa.as_ref().unwrap().rsrp.clone();
+                rsrq = self.nr5g_sa.as_ref().unwrap().rsrq.clone();
+            }
+            _ => (),
+        }
+        CpsiRow {
+            nwk_mode: self.mode.clone(),
+            rssi: rsrq,
+            rsrp: rsrp,
+        }
+    }
 }
 
 fn validate_ip(ip: &str) -> Result<Ipv4Addr, AddrParseError> {
@@ -295,10 +332,13 @@ fn parse_cpsi(input: String) -> Result<CPSI, String> {
     });
 }
 
+
 fn run_test(test_id: u32, args: &Cli) -> TestResult {
     let mut result = TestResult {
-        id: test_id,
-        timestamp: Local::now().format("%Y-%m-%d_%H:%M:%S").to_string(),
+        info: TestInfo{
+            id: test_id,
+            timestamp: Local::now().format("%Y-%m-%d_%H:%M:%S").to_string(),
+        },
         latency: None,
         iperf: None,
         signal: None,
@@ -344,13 +384,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let json_results = serde_json::to_string_pretty(&results)?;
+    let csv_rows: Vec<TestResultRow> = results.iter().map(|r| TestResultRow(
+        r.info.clone(),
+        r.latency.clone().unwrap_or_default(),
+        r.iperf.clone().unwrap_or_default(),
+        r.signal.clone().map(|c| c.to_cpsi_row()).unwrap_or_default())).collect();
+        
     if args.save_to_file {
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-        std::fs::write(format!("nettest-{timestamp}.json"), json_results)?;
+        let filename = format!("nettest-{timestamp}");
+        std::fs::write(format!("{filename}.json"), json_results)?;
+        let mut csv_wtr = csv::Writer::from_path(format!("{filename}.csv"))?;
+        csv_wtr.serialize(csv_rows)?;
+        csv_wtr.flush()?;
         println!("Results saved to results.json");
     } else {
         println!("{}", json_results);
+        let mut wtr = csv::Writer::from_writer(io::stdout());
+        wtr.serialize(csv_rows)?;
+        wtr.flush()?;
     }
- 
+
     Ok(())
 }
