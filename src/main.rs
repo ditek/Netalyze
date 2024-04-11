@@ -24,10 +24,19 @@ struct Cli {
     /// Save results to a file. If not specified, print to stdout
     #[arg(short, long="save")]
     save_to_file: bool,
+    /// Test label
+    #[arg(short, long, default_value="")]
+    label: String,
 }
 
 #[derive(Debug, Serialize)]
-struct TestResults {
+struct Test {
+    host: String,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ping_ip: Option<Ipv4Addr>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iperf_ip: Option<Ipv4Addr>,
     results: Vec<TestResult>,
 }
 
@@ -70,7 +79,6 @@ struct Ping {
 
 #[derive(Debug, Default, Clone, Serialize)]
 struct IPerf {
-    server: String,
     uplink: f64,
     downlink: f64,
     duration: i64,
@@ -215,7 +223,6 @@ fn run_iperf3(ip: Ipv4Addr) -> Result<IPerf, String> {
     let ul = json["end"]["sum_sent"]["bits_per_second"].as_f64().unwrap();
     let dl = json["end"]["sum_received"]["bits_per_second"].as_f64().unwrap();
     let result = IPerf {
-        server: json["start"]["connecting_to"]["host"].as_str().unwrap().to_string(),
         duration: json["start"]["test_start"]["duration"].as_i64().unwrap(),
         uplink: trim_float(ul * 1e-6),
         downlink: trim_float(dl * 1e-6),
@@ -366,9 +373,24 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
     result
 }
 
+fn get_hostname() -> String {
+    let output = Command::new("hostname")
+        .output()
+        .expect("Failed to execute 'hostname' command");
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    output_str.trim().to_string()
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
-    let mut results: Vec<TestResult> = Vec::new();
+    let test_label = args.label.clone();
+    let mut test = Test {
+        host: get_hostname(),
+        label: test_label.clone(),
+        ping_ip: args.ping_ip,
+        iperf_ip: args.iperf_ip,
+        results: Vec::new(),
+    };
     let mut test_id  = 0;
     loop {
         print!("\nPerform test {test_id}? (Press Enter to continue, 'no' to exit): ");
@@ -377,7 +399,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         io::stdin().read_line(&mut input).unwrap();
         match input.trim() {
             "" => {
-                results.push(run_test(test_id, &args));
+                test.results.push(run_test(test_id, &args));
                 test_id += 1;
             }
             "no" => break,
@@ -385,8 +407,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let json_results = serde_json::to_string_pretty(&results)?;
-    let csv_rows: Vec<TestResultRow> = results.iter().map(|r| TestResultRow(
+    let json_results = serde_json::to_string_pretty(&test)?;
+    let csv_rows: Vec<TestResultRow> = test.results.iter().map(|r| TestResultRow(
         r.info.clone(),
         r.ping.clone().unwrap_or_default(),
         r.iperf.clone().unwrap_or_default(),
@@ -394,7 +416,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
     if args.save_to_file {
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-        let filename = format!("nettest-{timestamp}");
+        let mut filename = format!("nettest-{timestamp}-{test_label}");
+        filename = filename.replace("-.", "."); // In case label is empty
         std::fs::write(format!("{filename}.json"), json_results)?;
         let mut csv_wtr = csv::Writer::from_path(format!("{filename}.csv"))?;
         csv_wtr.serialize(csv_rows)?;
