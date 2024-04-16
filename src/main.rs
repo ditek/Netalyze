@@ -416,18 +416,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         
     if args.save_to_file {
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-        let mut filename = format!("nettest-{timestamp}-{test_label}");
-        filename = filename.replace("-.", "."); // In case label is empty
-        std::fs::write(format!("{filename}.json"), json_results)?;
-        let mut csv_wtr = csv::Writer::from_path(format!("{filename}.csv"))?;
-        csv_wtr.serialize(csv_rows)?;
+        let mut filename = format!("netperf_{timestamp}_{test_label}.");
+        filename = filename.replace("_.", "."); // In case label is empty
+        std::fs::write(format!("{filename}json"), json_results)?;
+        let mut csv_wtr = csv::Writer::from_path(format!("{filename}csv"))?;
+        for row in csv_rows {
+            csv_wtr.serialize(row)?;
+        }
         csv_wtr.flush()?;
         println!("Results saved to results.json");
     } else {
         println!("{}", json_results);
-        let mut wtr = csv::Writer::from_writer(io::stdout());
-        wtr.serialize(csv_rows)?;
-        wtr.flush()?;
+        let mut csv_wtr = csv::Writer::from_writer(io::stdout());
+        for row in csv_rows {
+            csv_wtr.serialize(row)?;
+        }
+        csv_wtr.flush()?;
     }
 
     Ok(())
