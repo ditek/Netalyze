@@ -13,3 +13,4 @@ regex = "1.10.3"
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
 serialport = {version = "4.3.0", default-features = false}
+telegraf = "0.6.0"

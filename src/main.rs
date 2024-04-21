@@ -2,12 +2,15 @@ use clap::Parser;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
-use std::net::{AddrParseError, Ipv4Addr};
+use std::net::{AddrParseError, Ipv4Addr, SocketAddrV4};
 use std::process::Command;
 use std::{io, io::Write};
 use std::io::BufRead;
-use chrono::Local;
 use std::time::Duration;
+// use std::ops::{Deref, DerefMut};
+use chrono::Local;
+use telegraf::*;
+use telegraf::{protocol::Tag, Point};
 
 /// Run network latency and throughput tests
 #[derive(Parser)]
@@ -24,9 +27,16 @@ struct Cli {
     /// Save results to a file. If not specified, print to stdout
     #[arg(short, long="save")]
     save_to_file: bool,
+    /// Upload results to Influxdb server.
+    /// Format: <server>:<port>
+    #[arg(short='u', long="upload")]
+    telegraf_server: Option<SocketAddrV4>,
     /// Test label
     #[arg(short, long, default_value="")]
     label: String,
+    /// Only run a single test
+    #[arg(long="single")]
+    single_test: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,16 +70,26 @@ struct TestInfo{
 
 // Flatten the structs so we can serialize them to CSV
 #[derive(Serialize, Default)]
-struct TestResultRow(TestInfo, Ping, IPerf, CpsiRow);
+struct TestResultRow(TestInfoRow, Ping, IPerf, CpsiRow);
 
-#[derive(Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
+struct TestInfoRow{
+    host: String,
+    label: String,
+    id: u32,
+    timestamp: String,
+}
+
+#[derive(Serialize, Default, Metric)]
+#[measurement = "signal"]
 struct CpsiRow{
     nwk_mode: String,
     rssi: String,
     rsrp: String,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Metric)]
+#[measurement = "latency"]
 struct Ping {
     packet_loss: f64,
     min_latency: f64,
@@ -77,7 +97,8 @@ struct Ping {
     max_latency: f64,
 }
 
-#[derive(Debug, Default, Clone, Serialize)]
+#[derive(Debug, Default, Clone, Serialize, Metric)]
+#[measurement = "speed"]
 struct IPerf {
     uplink: f64,
     downlink: f64,
@@ -384,32 +405,42 @@ fn get_hostname() -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let test_label = args.label.clone();
+    let host = get_hostname();
     let mut test = Test {
-        host: get_hostname(),
+        host: host.clone(),
         label: test_label.clone(),
         ping_ip: args.ping_ip,
         iperf_ip: args.iperf_ip,
         results: Vec::new(),
     };
     let mut test_id  = 0;
-    loop {
-        print!("\nPerform test {test_id}? (Press Enter to continue, 'no' to exit): ");
-        io::stdout().flush().unwrap();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        match input.trim() {
-            "" => {
-                test.results.push(run_test(test_id, &args));
-                test_id += 1;
+    if args.single_test {
+        test.results.push(run_test(0, &args));
+    } else {
+        loop {
+            print!("\nPerform test {test_id}? (Press Enter to continue, 'no' to exit): ");
+            io::stdout().flush().unwrap();
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).unwrap();
+            match input.trim() {
+                "" => {
+                    test.results.push(run_test(test_id, &args));
+                    test_id += 1;
+                }
+                "no" => break,
+                _ => println!("Invalid input. Try again."),
             }
-            "no" => break,
-            _ => println!("Invalid input. Try again."),
         }
     }
 
     let json_results = serde_json::to_string_pretty(&test)?;
     let csv_rows: Vec<TestResultRow> = test.results.iter().map(|r| TestResultRow(
-        r.info.clone(),
+        TestInfoRow{
+            host: host.clone(),
+            label: test_label.clone(),
+            id: r.info.id,
+            timestamp: r.info.timestamp.clone(),
+        },
         r.ping.clone().unwrap_or_default(),
         r.iperf.clone().unwrap_or_default(),
         r.signal.clone().map(|c| c.to_cpsi_row()).unwrap_or_default())).collect();
@@ -432,6 +463,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             csv_wtr.serialize(row)?;
         }
         csv_wtr.flush()?;
+    }
+
+    if let Some(server) = args.telegraf_server {
+        let server = format!("tcp://{server}");
+        let mut client = Client::new(&server.to_string()).unwrap();
+        for result in test.results {
+            if let Some(metric) = result.ping {
+                let mut point = metric.to_point();
+                point.tags.push(Tag{name: String::from("id"), value: result.info.id.to_string()});
+                point.tags.push(Tag{name: String::from("host"), value: host.clone()});
+                point.tags.push(Tag{name: String::from("label"), value: test_label.clone()});
+                client.write_point(&point).unwrap();
+            }
+            if let Some(metric) = result.iperf {
+                let mut point = metric.to_point();
+                point.tags.push(Tag{name: String::from("id"), value: result.info.id.to_string()});
+                point.tags.push(Tag{name: String::from("host"), value: host.clone()});
+                point.tags.push(Tag{name: String::from("label"), value: test_label.clone()});
+                client.write_point(&point).unwrap();
+            }
+            if let Some(metric) = result.signal {
+                let mut point = metric.to_cpsi_row().to_point();
+                point.tags.push(Tag{name: String::from("id"), value: result.info.id.to_string()});
+                point.tags.push(Tag{name: String::from("host"), value: host.clone()});
+                point.tags.push(Tag{name: String::from("label"), value: test_label.clone()});
+                client.write_point(&point).unwrap();
+            }
+        }
     }
 
     Ok(())
