@@ -1,5 +1,5 @@
 netperf*.json
 netperf*.csv
 
-/target
+*/target
 .idea

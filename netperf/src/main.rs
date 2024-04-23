@@ -7,13 +7,13 @@ use std::process::Command;
 use std::{io, io::Write};
 use std::io::BufRead;
 use std::time::Duration;
-// use std::ops::{Deref, DerefMut};
 use chrono::Local;
 use telegraf::*;
-use telegraf::{protocol::Tag, Point};
+use telegraf::protocol::Tag;
 
 /// Run network latency and throughput tests
 #[derive(Parser)]
+#[command(arg_required_else_help(true))]
 struct Cli {
     /// IP address to ping
     #[arg(long, value_parser=validate_ip)]
@@ -414,6 +414,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         results: Vec::new(),
     };
     let mut test_id  = 0;
+    
     if args.single_test {
         test.results.push(run_test(0, &args));
     } else {
