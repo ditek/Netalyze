@@ -2,7 +2,7 @@ use clap::Parser;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
-use std::net::{AddrParseError, Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::process::Command;
 use std::{io, io::Write};
 use std::io::BufRead;
@@ -16,10 +16,10 @@ use telegraf::protocol::Tag;
 #[command(arg_required_else_help(true))]
 struct Cli {
     /// IP address to ping
-    #[arg(long, value_parser=validate_ip)]
+    #[arg(long)]
     ping_ip: Option<Ipv4Addr>,
     /// IP address for iperf3 server
-    #[arg(long, value_parser=validate_ip)]
+    #[arg(long)]
     iperf_ip: Option<Ipv4Addr>,
     /// Serial port for AT commands
     #[arg(long="serial")]
@@ -37,6 +37,18 @@ struct Cli {
     /// Only run a single test
     #[arg(long="single")]
     single_test: bool,
+    /// Speed test duration
+    #[arg(short='t', default_value="10")]
+    duration: u32,
+    /// Speed test mode. Possible values: udp, tcp.
+    #[arg(short, default_value="tcp", value_parser=validate_iperf_mode)]
+    mode: String,
+    /// Speed test direction. If true, run in reverse mode (download).
+    // #[arg(short='R', long)]
+    // reverse: bool,
+    /// n[KMGT] - Speed test data number of bytes. If specified, used in stead of duration.
+    #[arg(short='n', value_parser=validate_iperf_size)]
+    size: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +169,13 @@ struct Nr5gSa {
     snr: String,
 }
 
+struct IperfArgs {
+    ip: Ipv4Addr,
+    duration: u32,
+    mode: String,
+    size: Option<String>,
+}
+
 impl CPSI {
     fn to_cpsi_row(&self) -> CpsiRow {
         let mut rsrp = String::new();
@@ -184,8 +203,21 @@ impl CPSI {
     }
 }
 
-fn validate_ip(ip: &str) -> Result<Ipv4Addr, AddrParseError> {
-    ip.parse::<Ipv4Addr>()
+fn validate_iperf_mode(mode: &str) -> Result<String, String> {
+    if mode == "tcp" || mode == "udp" {
+        Ok(mode.to_string())
+    } else {
+        Err("Invalid mode. Possible values: tcp, udp".to_string())
+    }
+}
+
+fn validate_iperf_size(size: &str) -> Result<String, String> {
+    let re = Regex::new(r"\d+[KMG]").unwrap();
+    if re.is_match(size) {
+        Ok(size.to_string())
+    } else {
+        Err("Invalid size. Example values: 1M, 100K, 10G".to_string())
+    }
 }
 
 fn trim_float(x: f64) -> f64 {
@@ -218,31 +250,49 @@ fn run_ping(ip: Ipv4Addr) -> Result<Ping, String> {
             max_latency: caps[4].parse().expect("Failed to parse max rtt"),
         };
         println!("{:?}", ping);
-        // println!("{output_str}");
         return Ok(ping);
     } else {
-        eprintln!("Failed to parse ping output:\n{}", output_str);
-        return Err("Failed to parse ping output".to_string());
+        println!("{}", output_str);
+        return Err("failed to parse ping output. Make sure you use 'sudo'".to_string());
     }
 }
 
 #[allow(dead_code)]
-fn run_iperf3(ip: Ipv4Addr) -> Result<IPerf, String> {
-    println!("Running iperf3 test on {}...", ip);
-    let output = Command::new("iperf3")
-        .arg("-c")
-        .arg(ip.to_string())
-        .arg("-t")
-        .arg("1")
-        .arg("-J")
+fn run_iperf3(args: IperfArgs) -> Result<IPerf, String> {
+    println!("Running iperf3 test on {}...", args.ip);
+    let mut cmd = Command::new("iperf3");
+    cmd.arg("-c")
+        .arg(args.ip.to_string())
+        .arg("-J");
+    if let Some(mut size) = args.size.clone() {
+        size = size.to_uppercase();
+        cmd.arg("-n").arg(size);
+    } else {
+        cmd.arg("-t").arg(args.duration.to_string());
+    }
+    if args.mode == "udp" {
+        cmd.arg("-u").arg("-b").arg("0");
+    }
+
+    fn run_and_get_json(cmd: &mut Command) -> Result<Value, String> {
+        let output = cmd
         .output()
-        .expect("Failed to execute command");
+                .expect("Failed to execute command");
+            let output_json = String::from_utf8_lossy(&output.stdout);
+            let json: Value = serde_json::from_str(&output_json).expect("Failed to parse iperf3 output");
+            if json["start"]["connected"].as_array().unwrap().len() > 0 {
+                Ok(json)
+            } else {
+                Err("failed to connect to iperf3 server".to_string())
+            }
+    }
 
-    let output_json = String::from_utf8_lossy(&output.stdout);
-    let json: Value = serde_json::from_str(&output_json).expect("Failed to parse iperf3 output");
-
+    let mut json = run_and_get_json(&mut cmd)?;
     let ul = json["end"]["sum_sent"]["bits_per_second"].as_f64().unwrap();
+    cmd.arg("-R");
+    json = run_and_get_json(&mut cmd)?;
     let dl = json["end"]["sum_received"]["bits_per_second"].as_f64().unwrap();
+
     let result = IPerf {
         duration: json["start"]["test_start"]["duration"].as_i64().unwrap(),
         uplink: trim_float(ul * 1e-6),
@@ -380,7 +430,13 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
         }
     }
     if let Some(ip) = args.iperf_ip {
-        match run_iperf3(ip) {
+        let args = IperfArgs {
+            ip: ip,
+            duration: args.duration,
+            mode: args.mode.clone(),
+            size: args.size.clone(),
+        };
+        match run_iperf3(args) {
             Ok(iperf) => result.iperf = Some(iperf),
             Err(e) => eprintln!("Failed to run iperf3 test: {}", e),
         }
