@@ -13,7 +13,7 @@ use telegraf::protocol::Tag;
 
 /// Run network latency and throughput tests
 #[derive(Parser)]
-#[command(arg_required_else_help(true))]
+#[command(version, arg_required_else_help(true))]
 struct Cli {
     /// IP address to ping
     #[arg(long)]
