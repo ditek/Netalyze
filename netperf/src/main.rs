@@ -94,8 +94,8 @@ struct TestInfoRow{
 #[measurement = "signal"]
 struct CpsiRow{
     nwk_mode: String,
-    rssi: String,
-    rsrp: String,
+    rssi: f64,
+    rsrp: f64,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Metric)]
@@ -137,20 +137,19 @@ struct Lte {
     earfcn: String,
     dlbw: String,
     ulbw: String,
-    rsrq: String,
-    rsrp: String,
-    rssi: String,
-    rssnr: String,
+    rsrq: f64,
+    rsrp: f64,
+    rssi: f64,
+    rssnr: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct Nr5gNsa {
     pcell_id: String,
-    freq_band: String,
-    earfcn_ssb: String,
-    rsrp: String,
-    rsrq: String,
-    snr: String,
+    earfcn: String,
+    rsrp: f64,
+    rsrq: f64,
+    snr: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -162,9 +161,9 @@ struct Nr5gSa {
     pcell_id: String,
     freq_band: String,
     earfcn: String,
-    rsrp: String,
-    rsrq: String,
-    snr: String,
+    rsrp: f64,
+    rsrq: f64,
+    snr: f64,
 }
 
 struct IperfArgs {
@@ -176,8 +175,8 @@ struct IperfArgs {
 
 impl CPSI {
     fn to_cpsi_row(&self) -> CpsiRow {
-        let mut rsrp = String::new();
-        let mut rsrq = String::new();
+        let mut rsrp: f64 = 0.0;
+        let mut rsrq: f64 = 0.0;
         match self.mode.as_str() {
             "LTE" => {
                 rsrp = self.lte.as_ref().unwrap().rsrp.clone();
@@ -309,11 +308,22 @@ fn run_cpsi(serial_port: &str) -> Result<CPSI, String> {
     port.write_all(b"AT+CPSI?\r\n").expect("Failed to write to serial port");
     let mut reader = std::io::BufReader::new(port);
     let mut response = String::new();
+    let mut lines = Vec::new();
     // The first line is an echo of the command
     reader.read_line(&mut response).expect("Failed to read from serial port");
-    reader.read_line(&mut response).expect("Failed to read from serial port");
-    println!("{}", response);
-    match parse_cpsi(response.clone()) {
+    lines.push(response.clone());
+    loop {
+        response.clear();
+        reader.read_line(&mut response).expect("Failed to read from serial port");
+        lines.push(response.clone());
+        if response.contains("OK") || response.contains("ERROR") {
+            lines.pop();
+            break;
+        }
+    }
+    let all_lines = lines.join("\n");
+    println!("{}", all_lines);
+    match parse_cpsi(all_lines) {
         Ok(cpsi) => Ok(cpsi),
         Err(e) => Err(format!("{e}\nResponse: {response}")),
     }
@@ -321,23 +331,35 @@ fn run_cpsi(serial_port: &str) -> Result<CPSI, String> {
 
 #[allow(dead_code)]
 fn parse_cpsi(input: String) -> Result<CPSI, String> {
-    let mode_pattern = Regex::new(r"\+CPSI: (\w+),.+").unwrap();
     let lte_pattern = Regex::new(
         r"\+CPSI: LTE,(\w+),([\d-]+),0x([\dA-Fa-f]+),(\d+),(\d+),([\w-]+),(\d+),(\d+),(\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
-    let nr5g_nsa_pattern = Regex::new(r"\+CPSI: NR5G_NSA,(\d+),([\w-]+),(\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
+    let nr5g_nsa_pattern = Regex::new(r"\+CPSI: NR5G,(\d+),(\d+),(-?\d+),(-?\d+),(-?[\.\d]+)").unwrap();
     let nr5g_sa_pattern = Regex::new(
         r"\+CPSI: NR5G_SA,(\w+),([\d-]+),0x([\dA-Fa-f]+),(\d+),(\d+),([\w-]+),(\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
+
     // let lte_example = "+CPSI: LTE,Online,460-11,0x5A1E,187214780,257,EUTRAN-BAND3,1850,5,5,-94,-850,-545,15";
-    // let nr5g_nsa_example = "+CPSI: NR5G_NSA,644,NR5G_BAND78,627264,-960,-120,95";
+    // let nr5g_nsa_example = "+CPSI: NR5G,58,643296,-12,-86,8.5";
     // let nr5g_sa_example = "+CPSI: NR5G_SA,Online,242-12,0x765D,4955280,0,NR5G_BAND78,640704,-740,-110,240";
+    
+    // Those are from the AT Command Manual v1.01, but we see the ones in v1.00.01
+    // let nr5g_nsa_pattern = Regex::new(r"\+CPSI: NR5G,(\d+),([\w-]+),(\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
+    // let nr5g_nsa_example = "+CPSI: NR5G_NSA,644,NR5G_BAND78,627264,-960,-120,95";
 
     let mode: &str;
-    match mode_pattern.captures(&input) {
-        Some(caps) => {
-            mode = caps.get(1).unwrap().as_str();
-        }
-        None => return Err("Failed to parse mode".to_string()),
+    let lte_present = lte_pattern.is_match(&input);
+    let nr5g_nsa_present = nr5g_nsa_pattern.is_match(&input);
+    let nr5g_sa_present = nr5g_sa_pattern.is_match(&input);
+
+    if lte_present && nr5g_nsa_present {
+        mode = "NR5G_NSA";
+    } else if lte_present {
+        mode = "LTE";
+    } else if nr5g_sa_present {
+        mode = "NR5G_SA";
+    } else {
+        return Err("Failed to parse mode".to_string());
     }
+
     let mut lte : Option<Lte> = None;
     let mut nr5g_nsa : Option<Nr5gNsa> = None;
     let mut nr5g_sa : Option<Nr5gSa> = None;
@@ -356,10 +378,10 @@ fn parse_cpsi(input: String) -> Result<CPSI, String> {
                         earfcn: caps.get(7).unwrap().as_str().to_string(),
                         dlbw: caps.get(8).unwrap().as_str().to_string(),
                         ulbw: caps.get(9).unwrap().as_str().to_string(),
-                        rsrq: (caps.get(10).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
-                        rsrp: (caps.get(11).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
-                        rssi: (caps.get(12).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
-                        rssnr: caps.get(13).unwrap().as_str().to_string(),
+                        rsrq: caps.get(10).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        rsrp: caps.get(11).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        rssi: caps.get(12).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        rssnr: caps.get(13).unwrap().as_str().parse::<f64>().unwrap(),
                     })
                 }
                 None => return Err("Failed to parse LTE".to_string()),
@@ -370,11 +392,10 @@ fn parse_cpsi(input: String) -> Result<CPSI, String> {
                 Some(caps) => {
                     Some(Nr5gNsa {
                         pcell_id: caps.get(1).unwrap().as_str().to_string(),
-                        freq_band: caps.get(2).unwrap().as_str().to_string(),
-                        earfcn_ssb: caps.get(3).unwrap().as_str().to_string(),
-                        rsrp: (caps.get(4).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
-                        rsrq: (caps.get(5).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
-                        snr: caps.get(6).unwrap().as_str().to_string(),
+                        earfcn: caps.get(2).unwrap().as_str().to_string(),
+                        rsrp: caps.get(3).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        rsrq: caps.get(4).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        snr: caps.get(5).unwrap().as_str().parse::<f64>().unwrap(),
                     })
                 }
                 None => return Err("Failed to parse NR5G_NSA".to_string()),
@@ -391,9 +412,9 @@ fn parse_cpsi(input: String) -> Result<CPSI, String> {
                         pcell_id: caps.get(5).unwrap().as_str().to_string(),
                         freq_band: caps.get(6).unwrap().as_str().to_string(),
                         earfcn: caps.get(7).unwrap().as_str().to_string(),
-                        rsrp: (caps.get(8).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
-                        rsrq: (caps.get(9).unwrap().as_str().parse::<f64>().unwrap()/10.0).to_string(),
-                        snr: caps.get(10).unwrap().as_str().to_string(),
+                        rsrp: caps.get(8).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        rsrq: caps.get(9).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        snr: caps.get(10).unwrap().as_str().parse::<f64>().unwrap(),
                     })
                 }
                 None => return Err("Failed to parse NR5G_SA".to_string()),
