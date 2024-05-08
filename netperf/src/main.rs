@@ -503,9 +503,33 @@ fn get_hostname() -> String {
     output_str.trim().to_string()
 }
 
+/** 
+ * The label could include extra tags in the format: "label?key1=value1&key2=value2"
+ * This function parses the label and returns a vector of tags
+*/
+fn get_label_tags(label: &str) -> Vec<Tag> {
+    let mut tags: Vec<Tag> = Vec::new();
+    let re = regex::Regex::new(r"(\w+)\??(\w+=\w+&?)*").unwrap();
+    let re_tags = regex::Regex::new(r"(\w+)=(\w+)&?").unwrap();
+    // Do we have extra tags?
+    if let Some(caps) = re.captures(label) {
+        let word = &caps[1];
+        tags.push(Tag{name: String::from("label"), value: word.to_string()});
+        for cap in re_tags.captures_iter(label) {
+            let (_, [key, value]) = cap.extract();
+            tags.push(Tag{name: key.to_string(), value: value.to_string()});
+        }
+    } else {
+        tags.push(Tag{name: String::from("label"), value: label.to_string()});
+    }
+    tags
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
-    let test_label = args.label.clone();
+    let label_tags = get_label_tags(&args.label.clone());
+    let test_label = label_tags[0].value.clone();
+
     let host = get_hostname();
     let mut test = Test {
         host: host.clone(),
@@ -578,27 +602,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if num_tests > 1 {
                 tags.push(Tag{name: String::from("test_id"), value: result.info.id.to_string()});
             }
-            fn get_label_tags(label: &str) -> Vec<Tag> {
-                // The label could include extra tags in the format: label?key1=value1&key2=value2
-                let mut tags: Vec<Tag> = Vec::new();
-                let re = regex::Regex::new(r"(\w+)\??(\w+=\w+&?)*").unwrap();
-                let re_tags = regex::Regex::new(r"(\w+)=(\w+)&?").unwrap();
-                // Do we have extra tags?
-                if let Some(caps) = re.captures(label) {
-                    let word = &caps[1];
-                    tags.push(Tag{name: String::from("label"), value: word.to_string()});
-                    println!("Word: {}", word);
-                    for cap in re_tags.captures_iter(label) {
-                        let (_, [key, value]) = cap.extract();
-                        tags.push(Tag{name: key.to_string(), value: value.to_string()});
-                    }
-                    println!("Tags: {:?}", tags);        
-                } else {
-                    tags.push(Tag{name: String::from("label"), value: label.to_string()});
-                }
-                tags
-            }
-            tags.extend(get_label_tags(&test_label));
+            tags.extend(label_tags.clone());
             if let Some(metric) = result.ping {
                 let mut point = metric.to_point();
                 point.tags.extend(tags.clone());
@@ -607,6 +611,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(metric) = result.iperf {
                 let mut point = metric.to_point();
                 point.tags.extend(tags.clone());
+                point.tags.push(Tag{name: String::from("mode"), value: args.mode.clone()});
+                if let Some(size) = args.size.clone(){
+                    point.tags.push(Tag{name: String::from("size"), value: size});
+                }
                 client.write_point(&point).unwrap();
             }
             if let Some(metric) = result.signal {
