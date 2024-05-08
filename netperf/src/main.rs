@@ -31,7 +31,8 @@ struct Cli {
     /// Format: <server>:<port>
     #[arg(short='u', long="upload")]
     telegraf_server: Option<SocketAddrV4>,
-    /// Test label
+    /// Test label. It's possible to specify multiple Influxdb tags in the format:
+    /// "my_label?key1=value1&key2=value2". Note that the quotes are required if extra tags are used.
     #[arg(short, long, default_value="")]
     label: String,
     /// Only run a single test
@@ -43,9 +44,6 @@ struct Cli {
     /// Speed test mode. Possible values: udp, tcp.
     #[arg(short, default_value="tcp", value_parser=validate_iperf_mode)]
     mode: String,
-    /// Speed test direction. If true, run in reverse mode (download).
-    // #[arg(short='R', long)]
-    // reverse: bool,
     /// n[KMGT] - Speed test data number of bytes. If specified, used in stead of duration.
     #[arg(short='n', value_parser=validate_iperf_size)]
     size: Option<String>,
@@ -524,27 +522,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(server) = args.telegraf_server {
         let server = format!("tcp://{server}");
-        let mut client = Client::new(&server.to_string()).unwrap();
+        let mut client = telegraf::Client::new(&server.to_string()).unwrap();        
         for result in test.results {
+            let mut tags = vec![
+                Tag{name: String::from("host"), value: host.clone()},
+                Tag{name: String::from("id"), value: result.info.id.to_string()},
+            ];
+            fn get_label_tags(label: &str) -> Vec<Tag> {
+                // The label could include extra tags in the format: label?key1=value1&key2=value2
+                let mut tags: Vec<Tag> = Vec::new();
+                let re = regex::Regex::new(r"(\w+)\??(\w+=\w+&?)*").unwrap();
+                let re_tags = regex::Regex::new(r"(\w+)=(\w+)&?").unwrap();
+                // Do we have extra tags?
+                if let Some(caps) = re.captures(label) {
+                    let word = &caps[1];
+                    tags.push(Tag{name: String::from("label"), value: word.to_string()});
+                    println!("Word: {}", word);
+                    for cap in re_tags.captures_iter(label) {
+                        let (_, [key, value]) = cap.extract();
+                        tags.push(Tag{name: key.to_string(), value: value.to_string()});
+                    }
+                    println!("Tags: {:?}", tags);        
+                } else {
+                    tags.push(Tag{name: String::from("label"), value: label.to_string()});
+                }
+                tags
+            }
+            tags.extend(get_label_tags(&test_label));
             if let Some(metric) = result.ping {
                 let mut point = metric.to_point();
-                point.tags.push(Tag{name: String::from("id"), value: result.info.id.to_string()});
-                point.tags.push(Tag{name: String::from("host"), value: host.clone()});
-                point.tags.push(Tag{name: String::from("label"), value: test_label.clone()});
+                point.tags.extend(tags.clone());
                 client.write_point(&point).unwrap();
             }
             if let Some(metric) = result.iperf {
                 let mut point = metric.to_point();
-                point.tags.push(Tag{name: String::from("id"), value: result.info.id.to_string()});
-                point.tags.push(Tag{name: String::from("host"), value: host.clone()});
-                point.tags.push(Tag{name: String::from("label"), value: test_label.clone()});
+                point.tags.extend(tags.clone());
                 client.write_point(&point).unwrap();
             }
             if let Some(metric) = result.signal {
                 let mut point = metric.to_cpsi_row().to_point();
-                point.tags.push(Tag{name: String::from("id"), value: result.info.id.to_string()});
-                point.tags.push(Tag{name: String::from("host"), value: host.clone()});
-                point.tags.push(Tag{name: String::from("label"), value: test_label.clone()});
+                point.tags.extend(tags.clone());
                 client.write_point(&point).unwrap();
             }
         }
