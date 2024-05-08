@@ -94,7 +94,7 @@ struct TestInfoRow{
 #[measurement = "signal"]
 struct CpsiRow{
     nwk_mode: String,
-    rssi: f64,
+    rsrq: f64,
     rsrp: f64,
 }
 
@@ -121,7 +121,7 @@ struct CPSI {
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     lte: Option<Lte>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    nr5g_nsa: Option<Nr5gNsa>,
+    nr5g_nsa: Option<Lte>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     nr5g_sa: Option<Nr5gSa>,
 }
@@ -194,7 +194,7 @@ impl CPSI {
         }
         CpsiRow {
             nwk_mode: self.mode.clone(),
-            rssi: rsrq,
+            rsrq,
             rsrp: rsrp,
         }
     }
@@ -361,7 +361,7 @@ fn parse_cpsi(input: String) -> Result<CPSI, String> {
     }
 
     let mut lte : Option<Lte> = None;
-    let mut nr5g_nsa : Option<Nr5gNsa> = None;
+    let mut nr5g_nsa : Option<Lte> = None;
     let mut nr5g_sa : Option<Nr5gSa> = None;
     
     match mode {
@@ -388,14 +388,23 @@ fn parse_cpsi(input: String) -> Result<CPSI, String> {
             };
         },
         "NR5G_NSA" => {
-            nr5g_nsa = match nr5g_nsa_pattern.captures(&input) {
+            // NSA specific parameters seem to be buggy, so we use LTE parameters since they are shared
+            nr5g_nsa = match lte_pattern.captures(&input) {
                 Some(caps) => {
-                    Some(Nr5gNsa {
-                        pcell_id: caps.get(1).unwrap().as_str().to_string(),
-                        earfcn: caps.get(2).unwrap().as_str().to_string(),
-                        rsrp: caps.get(3).unwrap().as_str().parse::<f64>().unwrap()/10.0,
-                        rsrq: caps.get(4).unwrap().as_str().parse::<f64>().unwrap()/10.0,
-                        snr: caps.get(5).unwrap().as_str().parse::<f64>().unwrap(),
+                    Some(Lte {
+                        operation_mode: caps.get(1).unwrap().as_str().to_string(),
+                        mcc_mnc: caps.get(2).unwrap().as_str().to_string(),
+                        tac: caps.get(3).unwrap().as_str().to_string(),
+                        scell_id: caps.get(4).unwrap().as_str().to_string(),
+                        pcell_id: caps.get(5).unwrap().as_str().to_string(),
+                        freq_band: caps.get(6).unwrap().as_str().to_string(),
+                        earfcn: caps.get(7).unwrap().as_str().to_string(),
+                        dlbw: caps.get(8).unwrap().as_str().to_string(),
+                        ulbw: caps.get(9).unwrap().as_str().to_string(),
+                        rsrq: caps.get(10).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        rsrp: caps.get(11).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        rssi: caps.get(12).unwrap().as_str().parse::<f64>().unwrap()/10.0,
+                        rssnr: caps.get(13).unwrap().as_str().parse::<f64>().unwrap(),
                     })
                 }
                 None => return Err("Failed to parse NR5G_NSA".to_string()),
@@ -419,7 +428,6 @@ fn parse_cpsi(input: String) -> Result<CPSI, String> {
                 }
                 None => return Err("Failed to parse NR5G_SA".to_string()),
             };
-        
         }
         _ => return Err("Invalid mode {mode}".to_string()),
     }
