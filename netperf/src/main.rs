@@ -21,7 +21,7 @@ struct Cli {
     /// IP address for iperf3 server
     #[arg(long)]
     iperf_ip: Option<Ipv4Addr>,
-    /// Serial port for AT commands
+    /// Serial port for AT commands (e.g. /dev/ttyUSB2)
     #[arg(long="serial")]
     serial_port: Option<String>,
     /// Save results to a file. If not specified, print to stdout
@@ -33,7 +33,7 @@ struct Cli {
     telegraf_server: Option<SocketAddrV4>,
     /// Test label. It's possible to specify multiple Influxdb tags in the format:
     /// "my_label?key1=value1&key2=value2". Note that the quotes are required if extra tags are used.
-    #[arg(short, long, default_value="")]
+    #[arg(short, long, default_value="", verbatim_doc_comment)]
     label: String,
     /// Only run a single test
     #[arg(long="single")]
@@ -551,12 +551,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(server) = args.telegraf_server {
         let server = format!("tcp://{server}");
-        let mut client = telegraf::Client::new(&server.to_string()).unwrap();        
+        let mut client = telegraf::Client::new(&server.to_string()).unwrap();
+        let num_tests = test.results.len();
         for result in test.results {
             let mut tags = vec![
                 Tag{name: String::from("host"), value: host.clone()},
-                Tag{name: String::from("id"), value: result.info.id.to_string()},
             ];
+            if num_tests > 1 {
+                tags.push(Tag{name: String::from("test_id"), value: result.info.id.to_string()});
+            }
             fn get_label_tags(label: &str) -> Vec<Tag> {
                 // The label could include extra tags in the format: label?key1=value1&key2=value2
                 let mut tags: Vec<Tag> = Vec::new();
