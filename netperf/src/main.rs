@@ -2,11 +2,13 @@ use clap::Parser;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::Value;
+use serialport::SerialPort;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::process::Command;
 use std::{io, io::Write};
 use std::io::BufRead;
 use std::time::Duration;
+use std::thread;
 use chrono::Local;
 use telegraf::*;
 use telegraf::protocol::Tag;
@@ -295,7 +297,26 @@ fn run_iperf3(args: IperfArgs) -> Result<IPerf, String> {
         uplink: trim_float(ul * 1e-6),
         downlink: trim_float(dl * 1e-6),
     };
+    println!("{:?}", result);
     Ok(result)
+}
+
+fn read_line_with_retry(reader: &mut std::io::BufReader<Box<dyn SerialPort>>, response: &mut String, max_attempts: usize) -> Result<(), String> {
+    let mut attempts = 0;
+    while attempts < max_attempts {
+        match reader.read_line(response) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::TimedOut {
+                    attempts += 1;
+                    thread::sleep(Duration::from_millis(500));
+                } else {
+                    return Err(format!("Failed to read from serial port: {}", e));
+                }
+            }
+        }
+    }
+    Err(format!("Operation timed out after {} attempts", max_attempts))
 }
 
 fn run_cpsi(serial_port: &str) -> Result<CPSI, String> {
@@ -308,24 +329,21 @@ fn run_cpsi(serial_port: &str) -> Result<CPSI, String> {
     port.write_all(b"AT+CPSI?\r\n").expect("Failed to write to serial port");
     let mut reader = std::io::BufReader::new(port);
     let mut response = String::new();
-    let mut lines = Vec::new();
-    // The first line is an echo of the command
-    reader.read_line(&mut response).expect("Failed to read from serial port");
-    lines.push(response.clone());
     loop {
-        response.clear();
-        reader.read_line(&mut response).expect("Failed to read from serial port");
-        lines.push(response.clone());
+        if let Err(e) = read_line_with_retry(&mut reader, &mut response, 5) {
+            return Err(e);
+        }
         if response.contains("OK") || response.contains("ERROR") {
-            lines.pop();
             break;
         }
     }
-    let all_lines = lines.join("\n");
-    println!("{}", all_lines);
-    match parse_cpsi(all_lines) {
+    // Delete first line
+    response = response.lines().skip(1).collect::<Vec<&str>>().join("\n");
+    response = response.replace("\n\n", "\n");
+    println!("{}", response);
+    match parse_cpsi(response.clone()) {
         Ok(cpsi) => Ok(cpsi),
-        Err(e) => Err(format!("{e}\nResponse: {response}")),
+        Err(e) => Err(format!("{e}\nResponse: {}", response.clone()))
     }
 }
 
