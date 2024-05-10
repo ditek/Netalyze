@@ -49,6 +49,9 @@ struct Cli {
     /// n[KMGT] - Speed test data number of bytes. If specified, used in stead of duration.
     #[arg(short='n', value_parser=validate_iperf_size)]
     size: Option<String>,
+    /// Wait time between tests in seconds
+    #[arg(short='w', long="wait", default_value="0")]
+    wait_time: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -252,7 +255,7 @@ fn run_ping(ip: Ipv4Addr) -> Result<Ping, String> {
 }
 
 #[allow(dead_code)]
-fn run_iperf3(args: IperfArgs) -> Result<IPerf, String> {
+fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
     println!("Running iperf3 test on {}...", args.ip);
     let mut cmd = Command::new("iperf3");
     cmd.arg("-c")
@@ -281,9 +284,15 @@ fn run_iperf3(args: IperfArgs) -> Result<IPerf, String> {
             }
     }
 
+    println!("Running uplink test... ");
     let mut json = run_and_get_json(&mut cmd)?;
     let ul = json["end"]["sum_sent"]["bits_per_second"].as_f64().unwrap();
+    if wait_time > 0 {
+        println!("Waiting for {} seconds...", wait_time);
+        thread::sleep(Duration::from_secs(wait_time as u64));
+    }
     cmd.arg("-R");
+    println!("Running downlink test... ");
     json = run_and_get_json(&mut cmd)?;
     let dl = json["end"]["sum_received"]["bits_per_second"].as_f64().unwrap();
 
@@ -468,15 +477,19 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
             Ok(ping) => result.ping = Some(ping),
             Err(e) => eprintln!("Failed to run ping test: {}", e),
         }
+        if args.wait_time > 0 && args.iperf_ip.is_some() {
+        println!("Waiting for {} seconds...", args.wait_time);
+        thread::sleep(Duration::from_secs(args.wait_time as u64));
+    }
     }
     if let Some(ip) = args.iperf_ip {
-        let args = IperfArgs {
+        let iperf_args = IperfArgs {
             ip: ip,
             duration: args.duration,
             mode: args.mode.clone(),
             size: args.size.clone(),
         };
-        match run_iperf3(args) {
+        match run_iperf3(iperf_args, args.wait_time) {
             Ok(iperf) => result.iperf = Some(iperf),
             Err(e) => eprintln!("Failed to run iperf3 test: {}", e),
         }
