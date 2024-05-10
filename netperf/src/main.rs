@@ -95,7 +95,6 @@ struct TestInfoRow{
 #[derive(Serialize, Default, Metric)]
 #[measurement = "signal"]
 struct CpsiRow{
-    nwk_mode: String,
     rsrq: f64,
     rsrp: f64,
 }
@@ -194,11 +193,7 @@ impl CPSI {
             }
             _ => (),
         }
-        CpsiRow {
-            nwk_mode: self.mode.clone(),
-            rsrq,
-            rsrp: rsrp,
-        }
+        CpsiRow { rsrq, rsrp }
     }
 }
 
@@ -620,6 +615,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(metric) = result.signal {
                 let mut point = metric.to_cpsi_row().to_point();
                 point.tags.extend(tags.clone());
+                point.tags.push(Tag{name: String::from("mode"), value: metric.mode.clone()});
+                println!("{:?}", point);
                 client.write_point(&point).unwrap();
             }
         }
