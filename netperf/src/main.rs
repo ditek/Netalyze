@@ -29,6 +29,9 @@ struct Cli {
     /// Save results to a file. If not specified, print to stdout
     #[arg(short, long="save")]
     save_to_file: bool,
+    /// Start ID (ID of the first test)
+    #[arg(long, default_value="0")]
+    start_id: u32,
     /// Upload results to Influxdb server.
     /// Format: <server>:<port>
     #[arg(short='u', long="upload")]
@@ -40,6 +43,9 @@ struct Cli {
     /// Only run a single test
     #[arg(long="single")]
     single_test: bool,
+    /// Wait time between tests in seconds
+    #[arg(short='w', long="wait", default_value="0")]
+    wait_time: u32,
     /// Speed test duration
     #[arg(short='t', default_value="10")]
     duration: u32,
@@ -49,9 +55,6 @@ struct Cli {
     /// n[KMGT] - Speed test data number of bytes. If specified, used in stead of duration.
     #[arg(short='n', value_parser=validate_iperf_size)]
     size: Option<String>,
-    /// Wait time between tests in seconds
-    #[arg(short='w', long="wait", default_value="0")]
-    wait_time: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -561,7 +564,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         iperf_ip: args.iperf_ip,
         results: Vec::new(),
     };
-    let mut test_id  = 0;
+    let mut test_id  = args.start_id;
     
     if args.single_test {
         test.results.push(run_test(0, &args));
