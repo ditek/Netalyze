@@ -132,6 +132,7 @@ struct IPerf {
     mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     size: Option<String>,
+    lost_percent: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -285,6 +286,7 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
     if args.mode == "udp" {
         cmd.arg("-u").arg("-b").arg("0");
     }
+    let mut lost_percent: Vec<f64> = Vec::new();
 
     fn run_and_get_json(cmd: &mut Command) -> Result<Value, String> {
         let output = cmd
@@ -301,10 +303,16 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
 
     println!("Running uplink test... ");
     let mut json = run_and_get_json(&mut cmd)?;
-    let ul = json["end"]["sum_sent"]["bits_per_second"].as_f64();
+    let ul;
+    if args.mode == "udp" {
+        ul = json["end"]["sum"]["bits_per_second"].as_f64();
+    } else {
+        ul = json["end"]["sum_sent"]["bits_per_second"].as_f64();
+    }
     if ul.is_none() {
         return Err(format!("failed to parse uplink speed:\n{}", json.to_string()).to_string());
     }
+    lost_percent.push(json["end"]["sum"]["lost_percent"].as_f64().unwrap_or_default());
     if wait_time > 0 {
         println!("Waiting for {} seconds...", wait_time);
         thread::sleep(Duration::from_secs(wait_time as u64));
@@ -312,15 +320,22 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
     cmd.arg("-R");
     println!("Running downlink test... ");
     json = run_and_get_json(&mut cmd)?;
-    let dl = json["end"]["sum_received"]["bits_per_second"].as_f64();
+    let dl;
+    if args.mode == "udp" {
+        dl = json["end"]["sum"]["bits_per_second"].as_f64();
+    } else {
+        dl = json["end"]["sum_received"]["bits_per_second"].as_f64();
+    }
     if dl.is_none() {
         return Err(format!("failed to parse downlink speed:\n{}", json.to_string()).to_string());
     }
+    lost_percent.push(json["end"]["sum"]["lost_percent"].as_f64().unwrap_or_default());
 
     let result = IPerf {
         duration: args.duration,
         mode: args.mode.clone(),
         size: args.size.clone(),
+        lost_percent: lost_percent.iter().sum::<f64>() / lost_percent.len() as f64,
         uplink: trim_float(ul.unwrap() * 1e-6),
         downlink: trim_float(dl.unwrap() * 1e-6),
     };
