@@ -127,7 +127,11 @@ struct Ping {
 struct IPerf {
     uplink: f64,
     downlink: f64,
-    duration: i64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    duration: u32,
+    mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -297,7 +301,10 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
 
     println!("Running uplink test... ");
     let mut json = run_and_get_json(&mut cmd)?;
-    let ul = json["end"]["sum_sent"]["bits_per_second"].as_f64().unwrap();
+    let ul = json["end"]["sum_sent"]["bits_per_second"].as_f64();
+    if ul.is_none() {
+        return Err(format!("failed to parse uplink speed:\n{}", json.to_string()).to_string());
+    }
     if wait_time > 0 {
         println!("Waiting for {} seconds...", wait_time);
         thread::sleep(Duration::from_secs(wait_time as u64));
@@ -305,12 +312,17 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
     cmd.arg("-R");
     println!("Running downlink test... ");
     json = run_and_get_json(&mut cmd)?;
-    let dl = json["end"]["sum_received"]["bits_per_second"].as_f64().unwrap();
+    let dl = json["end"]["sum_received"]["bits_per_second"].as_f64();
+    if dl.is_none() {
+        return Err(format!("failed to parse downlink speed:\n{}", json.to_string()).to_string());
+    }
 
     let result = IPerf {
-        duration: json["start"]["test_start"]["duration"].as_i64().unwrap(),
-        uplink: trim_float(ul * 1e-6),
-        downlink: trim_float(dl * 1e-6),
+        duration: args.duration,
+        mode: args.mode.clone(),
+        size: args.size.clone(),
+        uplink: trim_float(ul.unwrap() * 1e-6),
+        downlink: trim_float(dl.unwrap() * 1e-6),
     };
     println!("{:?}", result);
     Ok(result)
@@ -550,6 +562,10 @@ fn get_label_string(tags: Vec<Tag>) -> String {
         label.push_str(&format!("__{}_{}", tag.name, tag.value));
     }
     label
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
