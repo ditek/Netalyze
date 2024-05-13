@@ -65,7 +65,7 @@ struct Test {
     results: Vec<TestResult>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct TestResult {
     #[serde(flatten)]
     info: TestInfo,
@@ -541,11 +541,18 @@ fn get_label_tags(label: &str) -> Vec<Tag> {
     tags
 }
 
+fn get_label_string(tags: Vec<Tag>) -> String {
+    let mut label = tags[0].value.clone();
+    for tag in tags.iter().skip(1) {
+        label.push_str(&format!("__{}_{}", tag.name, tag.value));
+    }
+    label
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let label_tags = get_label_tags(&args.label.clone());
-    let test_label = label_tags[0].value.clone();
-
+    let test_label = get_label_string(label_tags.clone());
     let host = get_hostname();
     let mut test = Test {
         host: host.clone(),
@@ -585,11 +592,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         r.ping.clone().unwrap_or_default(),
         r.iperf.clone().unwrap_or_default(),
-        r.signal.clone().map(|c| c.to_cpsi_row()).unwrap_or_default())).collect();
-        
-    if args.save_to_file {
+        r.signal.clone().map(|c| c.to_cpsi_row()).unwrap_or_default())
+    ).collect();
+
+    if args.save_to_file && !test.results.is_empty(){
+        let mut filename_parts = vec![test_label.clone()];
+        if args.iperf_ip.is_some() {
+            filename_parts.push(args.mode.clone());
+            if let Some(size) = args.size.clone(){
+                filename_parts.push(size);
+            }
+        }
+        if args.serial_port.is_some() {
+            let r = &test.results[0];
+            if let Some(signal) = &r.signal {
+                filename_parts.push(signal.mode.clone());
+            }
+        }
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-        let mut filename = format!("netperf_{timestamp}_{test_label}.");
+        let mut filename = format!("netperf_{timestamp}_");
+        filename.push_str(&filename_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join("_"));
+        filename.push('.');
         filename = filename.replace("_.", "."); // In case label is empty
         std::fs::write(format!("{filename}json"), json_results)?;
         let mut csv_wtr = csv::Writer::from_path(format!("{filename}csv"))?;
@@ -597,7 +620,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             csv_wtr.serialize(row)?;
         }
         csv_wtr.flush()?;
-        println!("Results saved to results.json");
+        println!("Results saved to {filename}json");
     } else {
         println!("{}", json_results);
         let mut csv_wtr = csv::Writer::from_writer(io::stdout());
@@ -611,7 +634,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let server = format!("tcp://{server}");
         let mut client = telegraf::Client::new(&server.to_string()).unwrap();
         let num_tests = test.results.len();
-        for result in test.results {
+        for result in test.results.clone() {
             let mut tags = vec![
                 Tag{name: String::from("host"), value: host.clone()},
             ];
@@ -632,7 +655,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 point.tags.extend(tags.clone());
                 point.tags.push(Tag{name: String::from("mode"), value: args.mode.clone()});
                 if let Some(size) = args.size.clone(){
-                    point.tags.push(Tag{name: String::from("size"), value: size});
+                    point.tags.push(Tag{name: String::from("size"), value: size.clone()});
                 }
                 client.write_point(&point).unwrap();
             }
