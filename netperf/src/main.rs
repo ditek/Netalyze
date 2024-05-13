@@ -284,7 +284,7 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
         cmd.arg("-t").arg(args.duration.to_string());
     }
     if args.mode == "udp" {
-        cmd.arg("-u").arg("-b").arg("0");
+        cmd.arg("-u").arg("-b").arg("1G");
     }
     let mut lost_percent: Vec<f64> = Vec::new();
 
