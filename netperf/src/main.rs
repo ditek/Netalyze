@@ -9,7 +9,7 @@ use std::{io, io::Write};
 use std::io::BufRead;
 use std::time::Duration;
 use std::thread;
-use chrono::{Local, DateTime};
+use chrono::Local;
 use telegraf::*;
 use telegraf::protocol::Tag;
 
@@ -83,15 +83,7 @@ struct TestResult {
 #[derive(Debug, Clone, Serialize, Default)]
 struct TestInfo{
     id: u32,
-    #[serde(serialize_with="serialize_timestamp")]
-    timestamp: DateTime<Local>,
-}
-
-fn format_timestamp(timestamp: &DateTime<Local>) -> String {
-    timestamp.format("%Y-%m-%d_%H-%M-%S").to_string()
-}
-fn serialize_timestamp<S>(timestamp: &DateTime<Local>, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
-    serializer.serialize_str(format_timestamp(timestamp).as_str())
+    timestamp: String,
 }
 
 // Flatten the structs so we can serialize them to CSV
@@ -504,7 +496,7 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
     let mut result = TestResult {
         info: TestInfo{
             id: test_id,
-            timestamp: Local::now(),
+            timestamp: Local::now().format("%Y-%m-%d_%H:%M:%S").to_string(),
         },
         ping: None,
         iperf: None,
@@ -516,9 +508,9 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
             Err(e) => eprintln!("Failed to run ping test: {}", e),
         }
         if args.wait_time > 0 && args.iperf_ip.is_some() {
-            println!("Waiting for {} seconds...", args.wait_time);
-            thread::sleep(Duration::from_secs(args.wait_time as u64));
-        }
+        println!("Waiting for {} seconds...", args.wait_time);
+        thread::sleep(Duration::from_secs(args.wait_time as u64));
+    }
     }
     if let Some(ip) = args.iperf_ip {
         let iperf_args = IperfArgs {
@@ -622,7 +614,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             host: host.clone(),
             label: test_label.clone(),
             id: r.info.id,
-            timestamp: format_timestamp(&r.info.timestamp),
+            timestamp: r.info.timestamp.clone(),
         },
         r.ping.clone().unwrap_or_default(),
         r.iperf.clone().unwrap_or_default(),
@@ -676,16 +668,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tags.push(Tag{name: String::from("test_id"), value: result.info.id.to_string()});
             }
             tags.extend(label_tags.clone());
-            let timestamp = protocol::Timestamp {value: result.info.timestamp.timestamp() as u64};
             if let Some(metric) = result.ping {
                 let mut point = metric.to_point();
-                point.timestamp = Some(timestamp.clone());
                 point.tags.extend(tags.clone());
                 client.write_point(&point).unwrap();
             }
             if let Some(metric) = result.iperf {
                 let mut point = metric.to_point();
-                point.timestamp = Some(timestamp.clone());
                 point.tags.extend(tags.clone());
                 point.tags.push(Tag{name: String::from("mode"), value: args.mode.clone()});
                 if let Some(size) = args.size.clone(){
@@ -695,10 +684,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(metric) = result.signal {
                 let mut point = metric.to_cpsi_row().to_point();
-                point.timestamp = Some(timestamp.clone());
                 point.tags.extend(tags.clone());
                 point.tags.push(Tag{name: String::from("mode"), value: metric.mode.clone()});
-                // println!("{:?}", point);
+                println!("{:?}", point);
                 client.write_point(&point).unwrap();
             }
         }
