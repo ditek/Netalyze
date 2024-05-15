@@ -294,8 +294,10 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
                 .expect("Failed to execute command");
             let output_json = String::from_utf8_lossy(&output.stdout);
             let json: Value = serde_json::from_str(&output_json).expect("Failed to parse iperf3 output");
-            if json["start"]["connected"].as_array().unwrap().len() > 0 {
+            if json["start"]["connected"].as_array().unwrap().len() > 0 && !json["error"].as_str().is_some() {
                 Ok(json)
+            } else if json["error"].as_str().is_some() {
+                Err(json["error"].to_string())
             } else {
                 Err("failed to connect to iperf3 server".to_string())
             }
@@ -303,6 +305,8 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
 
     println!("Running uplink test... ");
     let mut json = run_and_get_json(&mut cmd)?;
+    println!("Uplink test done");
+    println!("iperf version: {}", json["start"]["version"].as_str().unwrap_or_default());
     let ul;
     if args.mode == "udp" {
         ul = json["end"]["sum"]["bits_per_second"].as_f64();
@@ -320,6 +324,7 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
     cmd.arg("-R");
     println!("Running downlink test... ");
     json = run_and_get_json(&mut cmd)?;
+    println!("Downlink test done");
     let dl;
     if args.mode == "udp" {
         dl = json["end"]["sum"]["bits_per_second"].as_f64();
@@ -523,7 +528,10 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
     if let Some(ip) = args.iperf_ip {
         let iperf_args = IperfArgs {
             ip: ip,
-            duration: args.duration,
+            duration: match args.size.clone() {
+                Some(_size) => 0,
+                None => args.duration.clone(),
+            },
             mode: args.mode.clone(),
             size: args.size.clone(),
         };
