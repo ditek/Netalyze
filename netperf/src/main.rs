@@ -398,12 +398,14 @@ fn run_cpsi(serial_port: &str) -> Result<CPSI, String> {
 fn parse_cpsi(input: String) -> Result<CPSI, String> {
     let lte_pattern = Regex::new(
         r"\+CPSI: LTE,(\w+),([\d-]+),0x([\dA-Fa-f]+),(\d+),(\d+),([\w-]+),(\d+),(\d+),(\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
-    let nr5g_nsa_pattern = Regex::new(r"\+CPSI: NR5G,(\d+),(\d+),(-?\d+),(-?\d+),(-?[\.\d]+)").unwrap();
+    let nr5g_nsa_pattern = Regex::new(r"\+CPSI: NR5G(?:_NSA)?,(\d+),(\d+),(-?\d+),(-?\d+),(-?[\.\d]+)").unwrap();
     let nr5g_sa_pattern = Regex::new(
         r"\+CPSI: NR5G_SA,(\w+),([\d-]+),0x([\dA-Fa-f]+),(\d+),(\d+),([\w-]+),(\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
 
     // let lte_example = "+CPSI: LTE,Online,460-11,0x5A1E,187214780,257,EUTRAN-BAND3,1850,5,5,-94,-850,-545,15";
     // let nr5g_nsa_example = "+CPSI: NR5G,58,643296,-12,-86,8.5";
+    // OR (depending on firmware)
+    // let nr5g_nsa_example = "+CPSI: NR5G_NSA,58,643296,-12,-86,8.5";
     // let nr5g_sa_example = "+CPSI: NR5G_SA,Online,242-12,0x765D,4955280,0,NR5G_BAND78,640704,-740,-110,240";
     
     // Those are from the AT Command Manual v1.01, but we see the ones in v1.00.01
