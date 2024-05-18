@@ -661,17 +661,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::write(format!("{filename}json"), json_results)?;
         let mut csv_wtr = csv::Writer::from_path(format!("{filename}csv"))?;
         for row in csv_rows {
-            csv_wtr.serialize(row)?;
+            if csv_wtr.serialize(row).is_err() {
+                println!("Failed to write to CSV file");
+            }
         }
-        csv_wtr.flush()?;
+        if csv_wtr.flush().is_err() {
+            println!("Failed to flush CSV file");
+        }
         println!("Results saved to {filename}json");
     } else {
         println!("{}", json_results);
         let mut csv_wtr = csv::Writer::from_writer(io::stdout());
         for row in csv_rows {
-            csv_wtr.serialize(row)?;
+            if csv_wtr.serialize(row).is_err() {
+                println!("Failed to write to CSV file");
+            }
         }
-        csv_wtr.flush()?;
+        if csv_wtr.flush().is_err() {
+            println!("Failed to flush CSV file");
+        }
     }
 
     if let Some(server) = args.telegraf_server {
