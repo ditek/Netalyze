@@ -598,27 +598,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let label_tags = get_label_tags(&args.label.clone());
     let test_label = get_label_string(label_tags.clone());
     let host = get_hostname();
-    let mut test = Test {
-        host: host.clone(),
-        label: test_label.clone(),
-        ping_ip: args.ping_ip,
-        iperf_ip: args.iperf_ip,
-        results: Vec::new(),
-    };
+    let mut results_map = std::collections::HashMap::new();
     let mut test_id  = args.start_id;
     
     if args.single_test {
-        test.results.push(run_test(0, &args));
+        results_map.insert(test_id, run_test(test_id, &args));
     } else {
         loop {
-            print!("\nPerform test {test_id}? (Press Enter to continue, 'no' to exit): ");
+            print!("\nPerform test {test_id}? (Press Enter to continue, 'redo' to repeat the previous test, 'no' to exit): ");
             io::stdout().flush().unwrap();
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
             match input.trim() {
                 "" => {
-                    test.results.push(run_test(test_id, &args));
+                    results_map.insert(test_id, run_test(test_id, &args));
                     test_id += 1;
+                }
+                "redo" => {
+                    if test_id > 0 {
+                        results_map.insert(test_id-1, run_test(test_id-1, &args));
+                    } else {
+                        println!("No previous test to repeat");
+                    }
                 }
                 "no" => break,
                 _ => println!("Invalid input. Try again."),
@@ -626,6 +627,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    let test = Test {
+        host: host.clone(),
+        label: test_label.clone(),
+        ping_ip: args.ping_ip,
+        iperf_ip: args.iperf_ip,
+        results: results_map.values().cloned().collect(),
+    };
     let json_results = serde_json::to_string_pretty(&test)?;
     let csv_rows: Vec<TestResultRow> = test.results.iter().map(|r| TestResultRow(
         TestInfoRow{
