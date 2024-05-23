@@ -543,10 +543,61 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
         }
     }
     if let Some(port) = &args.serial_port {
-        match run_cpsi(port) {
-            Ok(cpsi) => result.signal = Some(cpsi),
-            Err(e) => eprintln!("Failed to run CPSI test: {}", e),
+        // Run CPSI test 3 times and save the average
+        let mut cpsi = CPSI {
+            mode: String::new(),
+            lte: None,
+            nr5g_nsa: None,
+            nr5g_sa: None,
+        };
+        let mut i = 0;
+        while i < 3 {
+            match run_cpsi(port) {
+                Ok(cpsi_result) => {
+                    if cpsi.mode.is_empty() {
+                        cpsi = cpsi_result.clone();
+                    } else {
+                        match cpsi.mode.as_str() {
+                            "LTE" => {
+                                cpsi.lte.as_mut().unwrap().rsrq += cpsi_result.lte.as_ref().unwrap().rsrq;
+                                cpsi.lte.as_mut().unwrap().rsrp += cpsi_result.lte.as_ref().unwrap().rsrp;
+                            },
+                            "NR5G_NSA" => {
+                                cpsi.nr5g_nsa.as_mut().unwrap().rsrq += cpsi_result.nr5g_nsa.as_ref().unwrap().rsrq;
+                                cpsi.nr5g_nsa.as_mut().unwrap().rsrp += cpsi_result.nr5g_nsa.as_ref().unwrap().rsrp;
+                            },
+                            "NR5G_SA" => {
+                                cpsi.nr5g_sa.as_mut().unwrap().rsrq += cpsi_result.nr5g_sa.as_ref().unwrap().rsrq;
+                                cpsi.nr5g_sa.as_mut().unwrap().rsrp += cpsi_result.nr5g_sa.as_ref().unwrap().rsrp;
+                            },
+                            _ => (),
+                        }
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Failed to run CPSI test: {}", e);
+                    i -= 1;
+                }
+            }
+            i += 1;
+            thread::sleep(Duration::from_secs(2));
         }
+        match cpsi.mode.as_str() {
+            "LTE" => {
+                cpsi.lte.as_mut().unwrap().rsrq /= 3.0;
+                cpsi.lte.as_mut().unwrap().rsrp /= 3.0;
+            },
+            "NR5G_NSA" => {
+                cpsi.nr5g_nsa.as_mut().unwrap().rsrq /= 3.0;
+                cpsi.nr5g_nsa.as_mut().unwrap().rsrp /= 3.0;
+            },
+            "NR5G_SA" => {
+                cpsi.nr5g_sa.as_mut().unwrap().rsrq /= 3.0;
+                cpsi.nr5g_sa.as_mut().unwrap().rsrp /= 3.0;
+            },
+            _ => (),
+        }
+        result.signal = Some(cpsi);
     }
     result
 }
