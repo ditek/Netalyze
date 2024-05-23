@@ -656,7 +656,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         results_map.insert(test_id, run_test(test_id, &args));
     } else {
         loop {
-            print!("\nPerform test {test_id}? (Press Enter to continue, 'redo' to repeat the previous test, an id to run a test with that id, 'no' to exit): ");
+            print!("\nPerform test {test_id}? (Press Enter to continue, 'redo' to repeat the previous test, 'delete' to delete the previous test, an id to run a test with that id, 'no' to exit): ");
             io::stdout().flush().unwrap();
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
@@ -670,6 +670,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         results_map.insert(test_id-1, run_test(test_id-1, &args));
                     } else {
                         println!("No previous test to repeat");
+                    }
+                }
+                "delete" => {
+                    if test_id > 0 {
+                        results_map.remove(&(test_id-1));
+                        println!("Test {} deleted", test_id-1);
+                    } else {
+                        println!("No previous test to delete");
                     }
                 }
                 "no" => break,
