@@ -551,6 +551,7 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
             nr5g_sa: None,
         };
         let mut i = 0;
+        let mut failures = 0;
         while i < 3 {
             match run_cpsi(port) {
                 Ok(cpsi_result) => {
@@ -576,7 +577,13 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
                 },
                 Err(e) => {
                     eprintln!("Failed to run CPSI test: {}", e);
+                    if failures > 3 {
+                        eprintln!("Failed to run CPSI test 3 times. Exiting...");
+                        result.signal = Some(cpsi);
+                        return result;
+                    }
                     i -= 1;
+                    failures += 1;
                 }
             }
             i += 1;
