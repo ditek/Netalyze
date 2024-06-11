@@ -398,7 +398,7 @@ fn run_cpsi(serial_port: &str) -> Result<CPSI, String> {
 fn parse_cpsi(input: String) -> Result<CPSI, String> {
     let lte_pattern = Regex::new(
         r"\+CPSI: LTE,(\w+),([\d-]+),0x([\dA-Fa-f]+),(\d+),(\d+),([\w-]+),(\d+),(\d+),(\d+),(-?\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
-    let nr5g_nsa_pattern = Regex::new(r"\+CPSI: NR5G(?:_NSA)?,(\d+),(\d+),(-?\d+),(-?\d+),(-?[\.\d]+)").unwrap();
+    let nr5g_nsa_pattern = Regex::new(r"\+CPSI: NR5G(?:_NSA)?,.+").unwrap();
     let nr5g_sa_pattern = Regex::new(
         r"\+CPSI: NR5G_SA,(\w+),([\d-]+),0x([\dA-Fa-f]+),(\d+),(\d+),([\w-]+),(\d+),(-?\d+),(-?\d+),(-?\d+)").unwrap();
 
