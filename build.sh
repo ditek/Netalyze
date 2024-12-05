@@ -14,6 +14,6 @@ elif [ "$ARCH" == "aarch64" ]; then
 else
     cargo build --release
     cross build --release
-    cp target/release/netalyze ../release/netalyze_x86
+    cp target/release/netalyze release/netalyze_x86
     cp target/aarch64-unknown-linux-gnu/release/netalyze release/netalyze_aarch64
 fi
