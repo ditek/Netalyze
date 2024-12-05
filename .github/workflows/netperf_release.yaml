@@ -24,10 +24,10 @@ jobs:
     - name: Update version in Cargo.toml
       run: |
         TAG_NAME=${GITHUB_REF#refs/tags/netalyze-}
-        sed -i "s/^version = \".*\"/version = \"$TAG_NAME\"/g" netalyze/Cargo.toml
+        sed -i "s/^version = \".*\"/version = \"$TAG_NAME\"/g" Cargo.toml
 
     - name: Run build.sh
-      run: chmod +x netalyze/build.sh && netalyze/build.sh
+      run: chmod +x build.sh && ./build.sh
 
     - name: Upload artifacts
       uses: skx/github-action-publish-binaries@master
