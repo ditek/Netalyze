@@ -1,4 +1,4 @@
-name: Build and Upload Netperf Artifacts
+name: Build and Upload netalyze Artifacts
 
 on:
   release:
@@ -23,15 +23,15 @@ jobs:
 
     - name: Update version in Cargo.toml
       run: |
-        TAG_NAME=${GITHUB_REF#refs/tags/netperf-}
-        sed -i "s/^version = \".*\"/version = \"$TAG_NAME\"/g" netperf/Cargo.toml
+        TAG_NAME=${GITHUB_REF#refs/tags/netalyze-}
+        sed -i "s/^version = \".*\"/version = \"$TAG_NAME\"/g" netalyze/Cargo.toml
 
     - name: Run build.sh
-      run: chmod +x netperf/build.sh && netperf/build.sh
+      run: chmod +x netalyze/build.sh && netalyze/build.sh
 
     - name: Upload artifacts
       uses: skx/github-action-publish-binaries@master
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        args: release/netperf_*
+        args: release/netalyze_*

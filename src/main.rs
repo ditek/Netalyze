@@ -734,7 +734,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-        let mut filename = format!("netperf_{timestamp}_");
+        let mut filename = format!("netalyze_{timestamp}_");
         filename.push_str(&filename_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join("_"));
         filename.push('.');
         filename = filename.replace("_.", "."); // In case label is empty
