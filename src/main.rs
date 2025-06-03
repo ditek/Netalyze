@@ -609,6 +609,17 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
     result
 }
 
+/**
+Get the signal mode from the serial port using AT commands
+The result could be LTE, NR5G_NSA or NR5G_SA
+*/
+fn get_signal_mode(serial_port: &str) -> Result<String, String> {
+    match run_cpsi(serial_port) {
+        Ok(cpsi) => Ok(cpsi.mode),
+        Err(e) => Err(format!("Failed to get signal mode: {}", e)),
+    }
+}
+
 fn get_hostname() -> String {
     let output = Command::new("hostname")
         .output()
@@ -651,43 +662,200 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+fn write_to_influxdb(
+    server: &SocketAddrV4,
+    host: &str,
+    label_tags: &[Tag],
+    args: &Cli,
+    result: &TestResult,
+) {
+    let Ok(mut client) = telegraf::Client::new(format!("tcp://{server}").as_str()) else {
+        eprintln!("Failed to create telegraf client to {server}");
+        return;
+    };
+    let mut tags = vec![
+        Tag{name: String::from("host"), value: host.to_string()},
+    ];
+    tags.push(Tag{name: String::from("test_id"), value: result.info.id.to_string()});
+    tags.extend_from_slice(label_tags);
+    let timestamp = protocol::Timestamp {value: result.info.timestamp.timestamp_nanos_opt().unwrap() as u64};
+    if let Some(metric) = &result.ping {
+        let mut point = metric.to_point();
+        point.timestamp = Some(timestamp.clone());
+        point.tags.extend(tags.clone());
+        if let Err(e) = client.write_point(&point) {
+            eprintln!("Failed writing ping to Influx: {e}");
+        }
+    }
+    if let Some(metric) = &result.iperf {
+        let mut point = metric.to_point();
+        point.timestamp = Some(timestamp.clone());
+        point.tags.extend(tags.clone());
+        point.tags.push(Tag{name: String::from("mode"), value: args.mode.clone()});
+        if let Some(size) = args.size.clone(){
+            point.tags.push(Tag{name: String::from("size"), value: size.clone()});
+        }
+        if let Err(e) = client.write_point(&point) {
+            eprintln!("Failed writing iperf to Influx: {e}");
+        }
+    }
+    if let Some(metric) = &result.signal {
+        let mut point = metric.to_cpsi_row().to_point();
+        point.timestamp = Some(timestamp.clone());
+        point.tags.extend(tags.clone());
+        point.tags.push(Tag{name: String::from("mode"), value: metric.mode.clone()});
+        // println!("{:?}", point);
+        if let Err(e) = client.write_point(&point) {
+            eprintln!("Failed writing signal to Influx: {e}");
+        }
+    }
+}
+
+fn save_test_to_file(
+    filename: &str,
+    test: &Test,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let json_results = serde_json::to_string_pretty(test)?;
+    std::fs::write(format!("{filename}json"), json_results)?;
+    let mut csv_wtr = csv::Writer::from_path(format!("{filename}csv"))?;
+    for result in &test.results {
+        let row = TestResultRow(
+            TestInfoRow{
+                host: test.host.clone(),
+                label: test.label.clone(),
+                id: result.info.id,
+                timestamp: format_timestamp(&result.info.timestamp),
+            },
+            result.ping.clone().unwrap_or_default(),
+            result.iperf.clone().unwrap_or_default(),
+            result.signal.clone().map(|c| c.to_cpsi_row()).unwrap_or_default()
+        );
+        if csv_wtr.serialize(row).is_err() {
+            println!("Failed to write to CSV file");
+        }
+    }
+    if csv_wtr.flush().is_err() {
+        println!("Failed to flush CSV file");
+    }
+    Ok(())
+}
+
+/**Create a Test instance from the passed results map */
+fn create_test_from_results(
+    host: &str,
+    test_label: &str,
+    args: &Cli,
+    results_map: &std::collections::HashMap<u32, TestResult>,
+) -> Test {
+    Test {
+        host: host.to_string(),
+        label: test_label.to_string(),
+        ping_ip: args.ping_ip,
+        iperf_ip: args.iperf_ip,
+        results: results_map.values().cloned().collect(),
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let label_tags = get_label_tags(&args.label.clone());
     let test_label = get_label_string(label_tags.clone());
     let host = get_hostname();
+    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    
+    // Generate a filename for the results ending with '.'
+    let filename = (|| {
+        let mut filename_parts = vec![test_label.clone()];
+        if args.iperf_ip.is_some() {
+            filename_parts.push(args.mode.clone());
+            if let Some(size) = args.size.clone(){
+                filename_parts.push(size);
+            }
+        }
+        if let Some(port) = &args.serial_port {
+            match get_signal_mode(port) {
+                Ok(mode) => filename_parts.push(mode),
+                Err(e) => eprintln!("Error getting signal mode: {}", e),
+            }
+        }
+        let mut filename = format!("netalyze_{timestamp}_");
+        filename.push_str(&filename_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join("_"));
+        filename.push('.');
+        // In case label is empty
+        filename.replace("_.", ".")
+    })();
+    
+    println!("Running tests on host: {host}, label: {test_label}, timestamp: {timestamp}");
+    if args.save_to_file {
+        println!("Results will be saved to: {filename}json/csv");
+    }
     let mut results_map = std::collections::HashMap::new();
     let mut test_id  = args.start_id;
+    let mut last_completed_test: Option<u32> = None;
     
     if args.single_test {
         results_map.insert(test_id, run_test(test_id, &args));
     } else {
         loop {
-            print!("\nPerform test {test_id}? (Press Enter to continue, 'redo' to repeat the previous test, 'delete' to delete the previous test, an id to run a test with that id, 'no' to exit): ");
+            print!("\nPerform test {test_id}? (Press Enter to store last result and continue, 'redo' to repeat the previous test, 'delete' to delete the previous test, an id to run a test with that id, 'no' to exit): ");
             io::stdout().flush().unwrap();
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
             match input.trim() {
                 "" => {
+                    if let Some(store_test_id) = last_completed_test {
+                        println!("Storing test {}...", store_test_id);
+                        if let (Some(result), Some(server)) = (results_map.get(&(store_test_id as u32)), args.telegraf_server){
+                            write_to_influxdb( &server, &host, &label_tags, &args, result);
+                            println!("Test {} stored to InfluxDB", store_test_id);
+                        }
+                        let test = create_test_from_results(&host, &test_label, &args, &results_map);
+                        if args.save_to_file && !test.results.is_empty() {
+                            save_test_to_file(&filename, &test)?;
+                        }
+                    } else {
+                        println!("No test to store");
+                    }
                     results_map.insert(test_id, run_test(test_id, &args));
+                    last_completed_test = Some(test_id);
                     test_id += 1;
                 }
                 "redo" => {
                     if test_id > 0 {
                         results_map.insert(test_id-1, run_test(test_id-1, &args));
+                        last_completed_test = Some(test_id-1);
                     } else {
                         println!("No previous test to repeat");
                     }
                 }
                 "delete" => {
                     if test_id > 0 {
-                        results_map.remove(&(test_id-1));
-                        println!("Test {} deleted", test_id-1);
+                        let delete_id = test_id - 1;
+                        results_map.remove(&delete_id);
+                        println!("Test {} deleted", delete_id);
+                        if last_completed_test == Some(delete_id) {
+                            last_completed_test = None;
+                        }
                     } else {
                         println!("No previous test to delete");
                     }
                 }
-                "no" => break,
+                "no" => {
+                    if let Some(store_test_id) = last_completed_test {
+                        println!("Storing test {}...", store_test_id);
+                        if let (Some(result), Some(server)) = (results_map.get(&(store_test_id as u32)), args.telegraf_server){
+                            write_to_influxdb( &server, &host, &label_tags, &args, result);
+                            println!("Test {} stored to InfluxDB", store_test_id);
+                        }
+                        let test = create_test_from_results(&host, &test_label, &args, &results_map);
+                       if args.save_to_file && !test.results.is_empty() {
+                            save_test_to_file(&filename, &test)?;
+                        }
+                    } else {
+                        println!("No test to store");
+                    }
+                    break
+                },
                 _ => match input.trim().parse::<u32>() {
                     Ok(id) => {
                         results_map.insert(id, run_test(id, &args));
@@ -699,107 +867,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let test = Test {
-        host: host.clone(),
-        label: test_label.clone(),
-        ping_ip: args.ping_ip,
-        iperf_ip: args.iperf_ip,
-        results: results_map.values().cloned().collect(),
-    };
-    let json_results = serde_json::to_string_pretty(&test)?;
-    let csv_rows: Vec<TestResultRow> = test.results.iter().map(|r| TestResultRow(
-        TestInfoRow{
-            host: host.clone(),
-            label: test_label.clone(),
-            id: r.info.id,
-            timestamp: format_timestamp(&r.info.timestamp),
-        },
-        r.ping.clone().unwrap_or_default(),
-        r.iperf.clone().unwrap_or_default(),
-        r.signal.clone().map(|c| c.to_cpsi_row()).unwrap_or_default())
-    ).collect();
-
+    let test = create_test_from_results(&host, &test_label, &args, &results_map);
     if args.save_to_file && !test.results.is_empty(){
-        let mut filename_parts = vec![test_label.clone()];
-        if args.iperf_ip.is_some() {
-            filename_parts.push(args.mode.clone());
-            if let Some(size) = args.size.clone(){
-                filename_parts.push(size);
-            }
-        }
-        if args.serial_port.is_some() {
-            let r = &test.results[0];
-            if let Some(signal) = &r.signal {
-                filename_parts.push(signal.mode.clone());
-            }
-        }
-        let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-        let mut filename = format!("netalyze_{timestamp}_");
-        filename.push_str(&filename_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>().join("_"));
-        filename.push('.');
-        filename = filename.replace("_.", "."); // In case label is empty
-        std::fs::write(format!("{filename}json"), json_results)?;
-        let mut csv_wtr = csv::Writer::from_path(format!("{filename}csv"))?;
-        for row in csv_rows {
-            if csv_wtr.serialize(row).is_err() {
-                println!("Failed to write to CSV file");
-            }
-        }
-        if csv_wtr.flush().is_err() {
-            println!("Failed to flush CSV file");
-        }
-        println!("Results saved to {filename}json");
+        save_test_to_file(&filename, &test)?;
+        println!("Test results saved to {}json/csv", filename);
     } else {
+        let json_results = serde_json::to_string_pretty(&test)?;
         println!("{}", json_results);
-        let mut csv_wtr = csv::Writer::from_writer(io::stdout());
-        for row in csv_rows {
-            if csv_wtr.serialize(row).is_err() {
-                println!("Failed to write to CSV file");
-            }
-        }
-        if csv_wtr.flush().is_err() {
-            println!("Failed to flush CSV file");
-        }
-    }
-
-    if let Some(server) = args.telegraf_server {
-        let server = format!("tcp://{server}");
-        let mut client = telegraf::Client::new(&server.to_string()).unwrap();
-        let num_tests = test.results.len();
-        for result in test.results.clone() {
-            let mut tags = vec![
-                Tag{name: String::from("host"), value: host.clone()},
-            ];
-            if num_tests > 1 {
-                tags.push(Tag{name: String::from("test_id"), value: result.info.id.to_string()});
-            }
-            tags.extend(label_tags.clone());
-            let timestamp = protocol::Timestamp {value: result.info.timestamp.timestamp_nanos_opt().unwrap() as u64};
-            if let Some(metric) = result.ping {
-                let mut point = metric.to_point();
-                point.timestamp = Some(timestamp.clone());
-                point.tags.extend(tags.clone());
-                client.write_point(&point).unwrap();
-            }
-            if let Some(metric) = result.iperf {
-                let mut point = metric.to_point();
-                point.timestamp = Some(timestamp.clone());
-                point.tags.extend(tags.clone());
-                point.tags.push(Tag{name: String::from("mode"), value: args.mode.clone()});
-                if let Some(size) = args.size.clone(){
-                    point.tags.push(Tag{name: String::from("size"), value: size.clone()});
-                }
-                client.write_point(&point).unwrap();
-            }
-            if let Some(metric) = result.signal {
-                let mut point = metric.to_cpsi_row().to_point();
-                point.timestamp = Some(timestamp.clone());
-                point.tags.extend(tags.clone());
-                point.tags.push(Tag{name: String::from("mode"), value: metric.mode.clone()});
-                // println!("{:?}", point);
-                client.write_point(&point).unwrap();
-            }
-        }
     }
 
     Ok(())
