@@ -756,6 +756,22 @@ fn create_test_from_results(
     }
 }
 
+/** Run a test and insert its results to a map and save it to a file */
+fn run_and_store_test(
+    results_map: &mut std::collections::HashMap<u32, TestResult>,
+    test_id: u32,
+    args: &Cli,
+    host: &str,
+    test_label: &str,
+    filename: &str,
+) {
+    results_map.insert(test_id, run_test(test_id, args));
+    let test = create_test_from_results(&host, &test_label, &args, &results_map);
+    if args.save_to_file {
+        let _ = save_test_to_file(&filename, &test);
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let label_tags = get_label_tags(&args.label.clone());
@@ -784,7 +800,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // In case label is empty
         filename.replace("_.", ".")
     })();
-    
+
     println!("Running tests on host: {host}, label: {test_label}, timestamp: {timestamp}");
     if args.save_to_file {
         println!("Results will be saved to: {filename}json/csv");
@@ -809,20 +825,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             write_to_influxdb( &server, &host, &label_tags, &args, result);
                             println!("Test {} stored to InfluxDB", store_test_id);
                         }
-                        let test = create_test_from_results(&host, &test_label, &args, &results_map);
-                        if args.save_to_file && !test.results.is_empty() {
-                            save_test_to_file(&filename, &test)?;
-                        }
                     } else {
                         println!("No test to store");
                     }
-                    results_map.insert(test_id, run_test(test_id, &args));
+                    run_and_store_test(&mut results_map, test_id, &args, &host, &test_label, &filename);
                     last_completed_test = Some(test_id);
                     test_id += 1;
                 }
                 "redo" => {
                     if test_id > 0 {
-                        results_map.insert(test_id-1, run_test(test_id-1, &args));
+                        run_and_store_test(&mut results_map, test_id-1, &args, &host, &test_label, &filename);
                         last_completed_test = Some(test_id-1);
                     } else {
                         println!("No previous test to repeat");
@@ -847,10 +859,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             write_to_influxdb( &server, &host, &label_tags, &args, result);
                             println!("Test {} stored to InfluxDB", store_test_id);
                         }
-                        let test = create_test_from_results(&host, &test_label, &args, &results_map);
-                       if args.save_to_file && !test.results.is_empty() {
-                            save_test_to_file(&filename, &test)?;
-                        }
                     } else {
                         println!("No test to store");
                     }
@@ -858,7 +866,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 _ => match input.trim().parse::<u32>() {
                     Ok(id) => {
-                        results_map.insert(id, run_test(id, &args));
+                        run_and_store_test(&mut results_map, id, &args, &host, &test_label, &filename);
                         test_id = id + 1;
                     }
                     Err(_) => println!("Invalid input. Try again."),
@@ -868,10 +876,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let test = create_test_from_results(&host, &test_label, &args, &results_map);
-    if args.save_to_file && !test.results.is_empty(){
-        save_test_to_file(&filename, &test)?;
-        println!("Test results saved to {}json/csv", filename);
-    } else {
+    if !args.save_to_file {
         let json_results = serde_json::to_string_pretty(&test)?;
         println!("{}", json_results);
     }
