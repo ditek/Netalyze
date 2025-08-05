@@ -120,3 +120,7 @@ chmod +x ./build.sh
 ```
 
 The executables are then found in the [release directory](../release/).
+
+
+## CI/CD
+The project has a Github action configured to build the different executables when a new release is created. The only requirement is that the release tag needs to follow the format `netalyze-vX.X.X`, for example `netalyze-v1.2.0`. 

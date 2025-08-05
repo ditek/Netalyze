@@ -520,7 +520,10 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
     if let Some(ip) = args.ping_ip {
         match run_ping(ip) {
             Ok(ping) => result.ping = Some(ping),
-            Err(e) => eprintln!("Failed to run ping test: {}", e),
+            Err(e) => {
+                eprintln!("Failed to run ping test: {}\nTest aborted...", e);
+                return result;
+            }
         }
         if args.wait_time > 0 && args.iperf_ip.is_some() {
             println!("Waiting for {} seconds...", args.wait_time);
@@ -539,7 +542,10 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
         };
         match run_iperf3(iperf_args, args.wait_time) {
             Ok(iperf) => result.iperf = Some(iperf),
-            Err(e) => eprintln!("Failed to run iperf3 test: {}", e),
+            Err(e) => {
+                eprintln!("Failed to run iperf3 test: {}\nTest aborted...", e);
+                return result;
+            }
         }
     }
     if let Some(port) = &args.serial_port {
