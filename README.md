@@ -12,12 +12,19 @@ Usage: netalyze [OPTIONS]
 Options:
       --ping-ip <PING_IP>         IP address to ping
       --iperf-ip <IPERF_IP>       IP address for iperf3 server
-      --serial <SERIAL_PORT>      Serial port for AT commands
+      --serial <SERIAL_PORT>      Serial port for AT commands (e.g. /dev/ttyUSB2)
   -s, --save                      Save results to a file. If not specified, print to stdout
+      --start-id <START_ID>       Start ID (ID of the first test) [default: 0]
   -u, --upload <TELEGRAF_SERVER>  Upload results to Influxdb server. Format: <server>:<port>
-  -l, --label <LABEL>             Test label [default: ]
+  -l, --label <LABEL>             Test label. It is possible to specify multiple Influxdb tags in the format: "my_label?key1=value1&key2=value2". Note that the quotes are required if extra tags are used. [default: ]
       --single                    Only run a single test
+  -w, --wait <WAIT_TIME>          Wait time between tests in seconds [default: 0]
+  -t <DURATION>                   Speed test duration [default: 10]
+  -m <MODE>                       Speed test mode. Possible values: udp, tcp [default: tcp]
+  -b <BITRATE>                    #[KMG] - Bitrate for iperf3 UDP test (e.g. 100M, 1G) [default: 1G]
+  -n <SIZE>                       #[KMG] - Speed test data number of bytes. If specified, used in stead of duration
   -h, --help                      Print help
+  -V, --version                   Print version
 ```
 
 The script can run multiple tests in sequence prompting the user before starting a new test. When all tests are over, the results are printed to stdout or saved to a file.
@@ -110,6 +117,11 @@ sudo apt install podman
 brew install podman
 ```
 
+### Run without building
+```sh
+cargo run -- --ping-ip 8.8.8.8
+```
+
 ### Build
 ```sh
 # Only needed the first time
@@ -117,6 +129,10 @@ chmod +x ./build.sh
 
 # Build for all platforms
 ./build.sh
+
+# On WSL you may get `bad interpreter: /bin/bash^M: no such file or directory`
+# In that case, run:
+dos2unix build.sh
 ```
 
 The executables are then found in the [release directory](../release/).

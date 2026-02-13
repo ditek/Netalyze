@@ -36,7 +36,7 @@ struct Cli {
     /// Format: <server>:<port>
     #[arg(short='u', long="upload")]
     telegraf_server: Option<SocketAddrV4>,
-    /// Test label. It's possible to specify multiple Influxdb tags in the format:
+    /// Test label. It is possible to specify multiple Influxdb tags in the format:
     /// "my_label?key1=value1&key2=value2". Note that the quotes are required if extra tags are used.
     #[arg(short, long, default_value="", verbatim_doc_comment)]
     label: String,
@@ -52,7 +52,10 @@ struct Cli {
     /// Speed test mode. Possible values: udp, tcp.
     #[arg(short, default_value="tcp", value_parser=validate_iperf_mode)]
     mode: String,
-    /// n[KMGT] - Speed test data number of bytes. If specified, used in stead of duration.
+    /// #[KMG] - Bitrate for iperf3 UDP test (e.g. 100M, 1G)
+    #[arg(short='b', value_parser=validate_iperf_size, default_value="1G")]
+    bitrate: Option<String>,
+    /// #[KMG] - Speed test data number of bytes. If specified, used in stead of duration.
     #[arg(short='n', value_parser=validate_iperf_size)]
     size: Option<String>,
 }
@@ -132,6 +135,8 @@ struct IPerf {
     mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bitrate: Option<String>,
     lost_percent: f64,
 }
 
@@ -191,6 +196,7 @@ struct IperfArgs {
     duration: u32,
     mode: String,
     size: Option<String>,
+    bitrate: Option<String>,
 }
 
 impl CPSI {
@@ -284,7 +290,8 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
         cmd.arg("-t").arg(args.duration.to_string());
     }
     if args.mode == "udp" {
-        cmd.arg("-u").arg("-b").arg("1G");
+        let bitrate = args.bitrate.clone().unwrap_or("1G".to_string());
+        cmd.arg("-u").arg("-b").arg(bitrate);
     }
     let mut lost_percent: Vec<f64> = Vec::new();
 
@@ -340,6 +347,7 @@ fn run_iperf3(args: IperfArgs, wait_time: u32) -> Result<IPerf, String> {
         duration: args.duration,
         mode: args.mode.clone(),
         size: args.size.clone(),
+        bitrate: args.bitrate.clone(),
         lost_percent: lost_percent.iter().sum::<f64>() / lost_percent.len() as f64,
         uplink: trim_float(ul.unwrap() * 1e-6),
         downlink: trim_float(dl.unwrap() * 1e-6),
@@ -539,6 +547,7 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
             },
             mode: args.mode.clone(),
             size: args.size.clone(),
+            bitrate: args.bitrate.clone(),
         };
         match run_iperf3(iperf_args, args.wait_time) {
             Ok(iperf) => result.iperf = Some(iperf),
