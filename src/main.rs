@@ -828,7 +828,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         results_map.insert(test_id, run_test(test_id, &args));
     } else {
         loop {
-            print!("\nPerform test {test_id}? (Press Enter to store last result and continue, 'redo' to repeat the previous test, 'delete' to delete the previous test, an id to run a test with that id, 'no' to exit): ");
+            print!("\nPerform test {test_id}? (Press Enter to store last result and continue, 'r' or 'redo' to repeat the previous test, 'd' or 'delete' to delete the previous test, an id to run a test with that id, 'no' to exit): ");
             io::stdout().flush().unwrap();
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
@@ -847,7 +847,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     last_completed_test = Some(test_id);
                     test_id += 1;
                 }
-                "redo" => {
+                "r" | "redo" => {
                     if test_id > 0 {
                         run_and_store_test(&mut results_map, test_id-1, &args, &host, &test_label, &filename);
                         last_completed_test = Some(test_id-1);
@@ -855,7 +855,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("No previous test to repeat");
                     }
                 }
-                "delete" => {
+                "d" | "delete" => {
                     if test_id > 0 {
                         let delete_id = test_id - 1;
                         results_map.remove(&delete_id);
