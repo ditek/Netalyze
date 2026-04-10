@@ -46,6 +46,9 @@ struct Cli {
     /// Wait time between tests in seconds
     #[arg(short='w', long="wait", default_value="0")]
     wait_time: u32,
+    /// Wait time between subtests in seconds (e.g. between ping and iperf)
+    #[arg(long="subtest-wait", default_value="0")]
+    subtest_wait_time: u32,
     /// Speed test duration
     #[arg(short='t', default_value="10")]
     duration: u32,
@@ -539,9 +542,9 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
                 return result;
             }
         }
-        if args.wait_time > 0 && args.iperf_ip.is_some() {
-            println!("Waiting for {} seconds...", args.wait_time);
-            thread::sleep(Duration::from_secs(args.wait_time as u64));
+        if args.subtest_wait_time > 0 && args.iperf_ip.is_some() {
+            println!("Waiting for {} seconds before next subtest...", args.subtest_wait_time);
+            thread::sleep(Duration::from_secs(args.subtest_wait_time as u64));
         }
     }
     if let Some(ip) = args.iperf_ip {
@@ -555,7 +558,7 @@ fn run_test(test_id: u32, args: &Cli) -> TestResult {
             size: args.size.clone(),
             bitrate: args.bitrate.clone(),
         };
-        match run_iperf3(iperf_args, args.wait_time) {
+        match run_iperf3(iperf_args, args.subtest_wait_time) {
             Ok(iperf) => result.iperf = Some(iperf),
             Err(e) => {
                 eprintln!("Failed to run iperf3 test: {}\nTest aborted...", e);
