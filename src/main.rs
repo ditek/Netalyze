@@ -58,6 +58,12 @@ struct Cli {
     /// #[KMG] - Speed test data number of bytes. If specified, used in stead of duration.
     #[arg(short='n', value_parser=validate_iperf_size)]
     size: Option<String>,
+    /// Run tests continuously with the specified wait_time
+    #[arg(short='c', long="continuous")]
+    continuous: bool,
+    /// Stop continuous mode after reaching this count (if 0, run forever)
+    #[arg(long="count", default_value="0")]
+    count: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -824,7 +830,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut test_id  = args.start_id;
     let mut last_completed_test: Option<u32> = None;
     
-    if args.single_test {
+    if args.continuous {
+        if args.wait_time == 0 {
+            eprintln!("Error: Continuous mode requires an explicit wait_time (> 0).");
+            std::process::exit(1);
+        }
+        
+        let mut count = 0;
+        loop {
+            run_and_store_test(&mut results_map, test_id, &args, &host, &test_label, &filename);
+            
+            if let Some(result) = results_map.get(&test_id) {
+                // Print to stdout
+                let json_result = serde_json::to_string_pretty(result).unwrap_or_default();
+                println!("{}", json_result);
+                
+                // Write to influxdb if enabled
+                if let Some(server) = args.telegraf_server {
+                    write_to_influxdb(&server, &host, &label_tags, &args, result);
+                    println!("Test {} stored to InfluxDB", test_id);
+                }
+            }
+            
+            test_id += 1;
+            count += 1;
+            
+            if args.count > 0 && count >= args.count {
+                break;
+            }
+            
+            println!("Waiting for {} seconds before next test...", args.wait_time);
+            thread::sleep(Duration::from_secs(args.wait_time as u64));
+        }
+    } else if args.single_test {
         results_map.insert(test_id, run_test(test_id, &args));
     } else {
         loop {
