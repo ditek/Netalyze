@@ -94,7 +94,8 @@ struct TestResult {
 
 #[derive(Debug, Clone, Serialize, Default)]
 struct TestInfo{
-    id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
     #[serde(serialize_with="serialize_timestamp")]
     timestamp: DateTime<Local>,
 }
@@ -114,7 +115,8 @@ struct TestResultRow(TestInfoRow, Ping, IPerf, CpsiRow);
 struct TestInfoRow{
     host: String,
     label: String,
-    id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
     timestamp: String,
 }
 
@@ -527,7 +529,7 @@ fn parse_cpsi(input: String) -> Result<CPSI, String> {
 fn run_test(test_id: u32, args: &Cli) -> TestResult {
     let mut result = TestResult {
         info: TestInfo{
-            id: test_id,
+            id: if args.continuous { None } else { Some(test_id) },
             timestamp: Local::now(),
         },
         ping: None,
@@ -700,7 +702,9 @@ fn write_to_influxdb(
     let mut tags = vec![
         Tag{name: String::from("host"), value: host.to_string()},
     ];
-    tags.push(Tag{name: String::from("test_id"), value: result.info.id.to_string()});
+    if let Some(id) = result.info.id {
+        tags.push(Tag{name: String::from("test_id"), value: id.to_string()});
+    }
     tags.extend_from_slice(label_tags);
     let timestamp = protocol::Timestamp {value: result.info.timestamp.timestamp_nanos_opt().unwrap() as u64};
     if let Some(metric) = &result.ping {
@@ -844,10 +848,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             run_and_store_test(&mut results_map, test_id, &args, &host, &test_label, &filename);
             
             if let Some(result) = results_map.get(&test_id) {
-                // Print to stdout
-                let json_result = serde_json::to_string_pretty(result).unwrap_or_default();
-                println!("{}", json_result);
-                
                 // Write to influxdb if enabled
                 if let Some(server) = args.telegraf_server {
                     write_to_influxdb(&server, &host, &label_tags, &args, result);
