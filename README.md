@@ -1,6 +1,25 @@
-# Network Perf
-Runs a latency test (ping), throughput test (iperf3) and measures radio signal quality.
-Supports x86 and ARM64 platforms.
+# Netalyze
+
+Netalyze is a Rust-based tool that automates running and logging network tests. It runs latency tests with `ping`, throughput tests with `iperf3`, and radio signal-quality measurements through modem AT commands. It can print results to stdout, save JSON and CSV files, or upload measurements to InfluxDB through a Telegraf socket listener. The tool supports x86 and ARM64 platforms. Supports SIMCOM modems (and modems with compatible AT commands) for radio tests.
+
+## What It Measures
+- **Latency & Packet Loss**: Statistics from `ping`.
+- **Throughput**: TCP or UDP uplink and downlink throughput via `iperf3`.
+- **Radio Signal Quality**: Radio mode, band, RSRP, RSRQ, SNR, and related modem signal fields.
+- **Workflow**: Repeated tests with labels, IDs, wait intervals, and optional upload targets.
+
+## Table of Contents
+- [What It Measures](#what-it-measures)
+- [Prerequisites](#prerequisites)
+- [Usage](#usage)
+- [Output](#output)
+- [Development](#development)
+- [CI/CD](#cicd)
+
+## Prerequisites
+- An `iperf3` server running on the target machine you test throughput against.
+- Root privileges (`sudo`) to run the tool, because the internal ping test uses a minimal interval which restricts usage for non-root users.
+- *(Optional)* A [Telegraf](#influxdb) server with a socket listener configured, in case you want to upload the measurements to InfluxDB.
 
 ## Usage
 ```sh
@@ -19,10 +38,15 @@ Options:
   -l, --label <LABEL>             Test label. It is possible to specify multiple Influxdb tags in the format: "my_label?key1=value1&key2=value2". Note that the quotes are required if extra tags are used. [default: ]
       --single                    Only run a single test
   -w, --wait <WAIT_TIME>          Wait time between tests in seconds [default: 0]
+      --subtest-wait <WAIT_TIME>  Wait time between subtests in seconds (e.g. between ping and iperf) [default: 0]
   -t <DURATION>                   Speed test duration [default: 10]
   -m <MODE>                       Speed test mode. Possible values: udp, tcp [default: tcp]
   -b <BITRATE>                    #[KMG] - Bitrate for iperf3 UDP test (e.g. 100M, 1G) [default: 1G]
   -n <SIZE>                       #[KMG] - Speed test data number of bytes. If specified, used in stead of duration
+  -c, --continuous
+          Run tests continuously with the specified wait_time
+      --count <COUNT>
+          Stop continuous mode after reaching this count (if 0, run forever) [default: 0]
   -h, --help                      Print help
   -V, --version                   Print version
 ```
@@ -30,8 +54,6 @@ Options:
 The script can run multiple tests in sequence prompting the user before starting a new test. When all tests are over, the results are printed to stdout or saved to a file.
 
 Example result:
-
-_Note: `sudo` is required when running the ping test as we test with a very small interval which is not allowed for non-root users._
 
 ```sh
 $ sudo ./netalyze_aarch64 --ping-ip 1.1.1.1 --iperf-ip 127.0.0.1 --serial /dev/ttyUSB2
@@ -44,6 +66,10 @@ AT+CPSI?
 +CPSI: NR5G_SA,Online,242-12,0x765D,4955280,0,NR5G_BAND78,640704,-770,-110,290
 
 Perform test 1? (Press Enter to continue, 'no' to exit): no
+```
+
+**JSON Output:**
+```json
 {
   "host": "rp2",
   "label": "",
@@ -80,6 +106,10 @@ Perform test 1? (Press Enter to continue, 'no' to exit): no
     }
   ]
 }
+```
+
+**CSV Output:**
+```csv
 id,timestamp,packet_loss,min_latency,avg_latency,max_latency,uplink,downlink,duration,nwk_mode,rssi,rsrp
 0,2024-04-15_17:48:22,0.0,15.457,17.956,25.852,5482.5,5416.6,1,NR5G_SA,-11,-77
 ```
@@ -90,7 +120,7 @@ id,timestamp,packet_loss,min_latency,avg_latency,max_latency,uplink,downlink,dur
 The script prints the result in JSON and CSV format to stdout by default. With the `--save` option, the result is saved to the files `netalyze_<timestamp>_<label>.json` and `netalyze_<timestamp>_<label>.csv`.
 
 ### Influxdb
-It can also upload the results to an Influxdb server via a Telegraf socket using the `--upload` option. It sends the data in Line Protocol format.
+It can also upload the results to an [InfluxDB](https://www.influxdata.com/) server via a [Telegraf](https://www.influxdata.com/time-series-platform/telegraf/) socket using the `--upload` option. It sends the data in Line Protocol format.
 Use the following in `telegraf.conf` to setup the input plugin:
 
 ```toml
@@ -107,7 +137,7 @@ Building the project requires installing the following dependencies:
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Fro cross-compilation
+# For cross-compilation
 # Install Cross
 cargo install cross
 # Install Podman
