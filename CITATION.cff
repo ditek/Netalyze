@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use Netalyze, please cite it as follows."
+title: "Netalyze"
+type: software
+authors:
+  - name: "Diaa J."
+version: "1.4.0"
+date-released: "2026-06-22"
+repository-code: "https://github.com/netalyze-project/netalyze"
+license: "Apache-2.0"
