@@ -6,5 +6,5 @@ authors:
   - name: "Diaa J."
 version: "1.4.0"
 date-released: "2026-06-22"
-repository-code: "https://github.com/netalyze-project/netalyze"
+repository-code: "https://github.com/ditek/netalyze"
 license: "Apache-2.0"
